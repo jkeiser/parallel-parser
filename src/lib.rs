@@ -15,6 +15,7 @@ trait Bitmask: Sized {
     const NO_BITS: Self;
     const EVEN_BITS: Self;
     const ODD_BITS: Self;
+    const TOP_BIT: Self;
 }
 
 trait CarrylessMul: Sized {
@@ -42,36 +43,251 @@ impl Bitmask for u64 {
     const NO_BITS: Self   = 0b00000000_00000000_00000000_00000000_00000000_00000000_00000000_00000000;
     const EVEN_BITS: Self = 0b01010101_01010101_01010101_01010101_01010101_01010101_01010101_01010101;
     const ODD_BITS: Self  = 0b10101010_10101010_10101010_10101010_10101010_10101010_10101010_10101010;
+    const TOP_BIT: Self   = 0b10000000_00000000_00000000_00000000_00000000_00000000_00000000_00000000;
 }
 
-// Parses exactly 64 bits, with possible information about the prior 64 bits.
+struct u512(u64x8);
+
+impl u512 {
+    fn rotate_left(self, count: usize) -> Self {
+        // If this is a rotate of more than 64 bits, do that first with a shuffle.
+        let word_shift = count / 64;
+        let word_rotated = shuffle!(self.0, [0,1,2,3,4,5,6,7].rotate_left(word_shift));
+
+        // Rotate each 64-bit word individually.
+        let bit_rotated = word_rotated.rotate_left(count);
+
+        // Separate the correctly-shifted and carried bits
+        let mask = u64x8::splat(u64::ALL_BITS << (count % 64));
+        let shifted = bit_rotated & mask;
+        let carried = bit_rotated & !mask.replace(0,0);
+
+        // Shift the carries over and put the result back together
+        let lane_mask = [0,1,2,3,4,5,6,7].rotate_left(1);
+        shifted | shuffle!(carried, lane_mask);
+    }
+    fn rotate_right(self, count: usize) -> Self {
+        // If this is a rotate of more than 64 bits, do that first with a shuffle.
+        let word_shift = count / 64;
+        let word_rotated = shuffle!(self.0, [0,1,2,3,4,5,6,7].rotate_right(word_shift));
+
+        // Rotate each 64-bit word individually.
+        let bit_rotated = word_rotated.rotate_right(count);
+
+        // Separate the correctly-shifted and carried bits
+        let mask = u64x8::splat(u64::ALL_BITS >> (count % 64));
+        let shifted = bit_rotated & mask;
+        let carried = bit_rotated & !mask.replace(7,0);
+
+        // Shift the carries over and put the result back together
+        let lane_mask = [0,1,2,3,4,5,6,7].rotate_right(1);
+        shifted | shuffle!(carried, lane_mask);
+    }
+}
+impl Shl for u512 {
+    fn shl(self, count: usize) -> Self {
+        let word_shift = count / 64;
+        if word_shift > 7 {
+            return u512(u64x8::splat(0));
+        }
+        if (count >= 512) {
+            return u512(u64x8::splat(0));
+        } else if (count == 0) {
+            return self;
+        }
+
+        // Rotate it and then bring in the zeroes
+        let rotated = self.rotate_left(count);
+        let word_shift = 
+        // If this is a shift more than 64 bits, do that first with a shuffle.
+        let full_shift = (count - 1) / 64;
+        if full_shift > 0 {
+            shuffle!([0,1,2,3,4,5,6,7].rotate_left)
+        }
+
+
+        // Rotate each individually (taking the carried bits into the bottom where zeroes would be)
+        let rotated64 = self.0.rotate_left(count);
+        // Separate the correctly-shifted and carried bits
+        let mask = u64::ALL_BITS << count;
+        let shifted = rotated64 & u64x8::splat(mask);
+        let carried = rotated64 & u64x8::splat(!mask).replace(0, 0);
+        // Shift the carries over and put the result back together
+        let mut lane_mask = [0,1,2,3,4,5,6,7].rotate_right(word_shift);
+        lane_mask[0..word_shift].copy_from_slice([0,0,0,0,0,0,0,0][0..word_shift])
+        shifted | shuffle!(carried, lane_mask);
+    }
+}
+
+impl Shr for u512 {
+    fn shr(self, count: usize) -> Self {
+        if (count >= 512) {
+            return u512(u64x8::splat(0));
+        } else if (count == 0) {
+            return self;
+        }
+
+        // Rotate each individually (taking the carried bits into the top where zeroes would be)
+        let rotated64 = self.0.rotate_right(count);
+        // Separate the correctly-shifted and carried bits
+        let mask = u64::ALL_BITS >> count;
+        let shifted = rotated64 & u64x8::splat(mask);
+        let carried = rotated64 & u64x8::splat(!mask).replace(7, 0);
+        // Shift the carries over and put the result back together
+        let word_shift = (count + 63) / 64;
+        let mut lane_mask = [0,1,2,3,4,5,6,7].rotate_right(word_shift);
+        lane_mask[lane_mask.len()-word_shift..lane_mask.len()].copy_from_slice([7,7,7,7,7,7,7,7][0..word_shift])
+        shifted | shuffle!(carried, lane_mask);
+    }
+}
+
+impl BitXor for u512 {
+    fn bit_xor(self, other: Self) -> Self {
+        u512(self.0.bit_xor(other.0))
+    }
+}
+
+impl BitOr for u512 {
+    fn bit_or(self, other: Self) -> Self {
+        u512(self.0.bit_or(other.0))
+    }
+}
+
+impl BitAnd for u512 {
+    fn bit_or(self, other: Self) -> Self {
+        u512(self.0.bit_and(other.0))
+    }
+}
+
+impl Not for u512 {
+    fn not(self) -> Self {
+        u512(self.0.not())
+    }
+}
+
+
+
+
+// Parses exactly 512 bytes.
+pub mod parser512 {
+    type Bitmask = u64x8;
+    type Chunks = &[u8x64;NUM_CHUNKS];
+    type Bytes = &[u8;NUM_BYTES];
+    type BYTES_PER_CHUNK = 64;
+    type NUM_CHUNKS = 8;
+    type NUM_BYTES = NUM_CHUNKS*BYTES_PER_CHUNK;
+
+    pub struct BlockData {
+        pub escape_mask: Bitmask;
+        pub string_mask: Bitmask;
+        pub first_character_is_escaped: bool;
+    }
+    pub struct NextData {
+        pub still_in_string: bool;
+        pub next_character_is_escaped: bool;
+    }
+
+    pub fn parse(input: &Chunks, next_data: NextData) -> (BlockData, NextData) {
+        let (escape_mask, first_character_is_escaped, next_character_is_escaped) = find_backslashes(input, &next_data);
+        (BlockData { escape_mask, string_mask: u8x64::splat(0), first_character_is_escaped }, NextData { next_character_is_escaped, still_in_string: false })
+    }
+
+    fn backslashes(input: &Chunks) -> Bitmask {
+        // Make the backslash mask by SIMD eq'ing each 64 byte chunk of input.
+        let backslashes: &[parser64::Bitmask;NUM_CHUNKS] = input.map(input64 => parser64::backslashes(input[i]).collect();
+        backslashes as Bitmask
+    }
+
+    fn find_backslashes(input: &Chunks, next_data: NextData) -> (BlockData, NextData) {
+        let first_character_is_escaped = next_data.next_character_is_escaped as u64;
+
+        // Make the backslash mask by SIMD eq'ing each 64 byte chunk of input.
+        let backslashes: Bitmask = input.map(input64 => parser64::backslashes(input[i]).collect();
+        // If the first character is escaped, pretend it's not a backslash. We'll fix it in post.
+        backslashes.set(0, backslashes.extract(0) & !next_data.next_character_is_escaped);
+        
+        // Find the position of escaped characters (the character after any odd-length series of backslashes)
+        let (escape_mask, next_character_is_escaped) = escape_mask(backslashes);
+        // Denote that the first character is escaped (if it is supposed to be)
+        escape_mask.set(0, escape_mask.extract(0) | first_character_is_escaped);
+    }
+
+    fn escape_mask(backslashes: Bitmask) -> (Bitmask, bool) {
+        // Find the first backslash in each series of backslashes
+        let escape_starts = backslashes & !(backslashes << 1);
+
+        // Find out where runs of bits end by adding the starts to the bits, causing addition to overflow.
+        // e.g.
+        //      00011100011110010 (bits)
+        //      00010000010000010 (run starts)
+        //      00000010000001001 (run ends)
+        //
+        // We actually do this separately for runs that start on even indices, and runs that start
+        // on odd indices. (We'll use this to check for odd vs. even length later). In this case
+        // only the runs we want actually get a carry, so we have to mask out the original bits
+        // to get rid of the runs we didn't check. i.e.:
+        //      00011100011110010 (bits)
+        //      00000000000000010 (even starts)
+        //      00011100011110001 (even sum)
+        //      00000000000000001 (even ends)
+        let (even_sum, _) = backslashes.overflowing_add(escape_starts & u64::EVEN_BITS);
+        let (odd_sum, odd_overflow) = backslashes.overflowing_add(escape_starts & u64::ODD_BITS);
+
+        // To find runs with odd length, we find even runs that ended on odd bits (and vice versa): 
+        //      00011100011110010 (bits)
+        //      00000000000000001 (even ends)
+        //      00000000000000001 (even ends on odd bits)
+        //      00000010000001000 (odd ends)
+        //      00000010000000000 (odd ends on even bits)
+        //      00000010000000001 (odd length ends)
+        let escaped_characters = ((even_sum & u64::ODD_BITS) | (odd_sum & u64::EVEN_BITS)) & !backslashes;
+
+        // Overflow from odd_carries means an odd backslash run goes all the way to the end of the
+        // input.
+        let next_character_is_escaped = odd_overflow;
+
+        println!("{:30}: {:064b}", "backslashes", backslashes.reverse_bits());
+        println!("{:30}: {:064b}", "escaped_characters", escaped_characters.reverse_bits());
+        let escape_mask = backslashes | escaped_characters;
+        (escape_mask, next_character_is_escaped)
+    }
+}
+
+// Parses exactly 64 bytes.
 pub mod parser64 {
     use packed_simd::*;
     use super::*;
 
-    const BACKSLASHES: u8x64 = u8x64::splat(b'\\');
-    const QUOTES: u8x64 = u8x64::splat(b'"');
+    type Bitmask = u64;
+    type Chunks = u8x64;
+    type Bytes = &[u8;NUM_BYTES];
+    type BYTES_PER_CHUNK = 1;
+    type NUM_CHUNKS = 1;
+    type NUM_BYTES = NUM_CHUNKS*BYTES_PER_CHUNK;
+
+    const BACKSLASHES: Chunks = u8x64::splat(b'\\');
+    const QUOTES: Chunks = u8x64::splat(b'"');
 
     pub struct BlockData {
-        pub escape_mask: u64,
-        pub string_mask: u64,
+        pub escape_mask: Bitmask,
+        pub string_mask: Bitmask,
         pub first_character_is_escaped: bool,
     }
     pub struct NextData {
-        pub still_in_string: u64,
+        pub still_in_string: bool,
         pub next_character_is_escaped: bool,
     }
 
-    pub fn parse(input: u8x64, next_data: NextData) -> (BlockData, NextData) {
+    pub fn parse(input: Chunks, next_data: NextData) -> (BlockData, NextData) {
         let (escape_mask, first_character_is_escaped, next_character_is_escaped) = find_backslashes(input, &next_data);
         let (string_mask, still_in_string) = find_strings(input, escape_mask, &next_data);
         (BlockData { escape_mask, string_mask, first_character_is_escaped }, NextData { next_character_is_escaped, still_in_string })
     }
 
-    fn find_backslashes(input: u8x64, next_data: &NextData) -> (u64, bool, bool) {
+    fn find_backslashes(input: Chunks, next_data: &NextData) -> (u64, bool, bool) {
         let first_character_is_escaped = next_data.next_character_is_escaped;
         // If the first character is escaped, pretend it's not a backslash
-        let backslashes = input.eq(BACKSLASHES).bitmask() & !(first_character_is_escaped as u64);
+        let backslashes = backslash_mask(input) & !(first_character_is_escaped as u64);
         // Find the position of escaped characters (the character after any odd-length series of backslashes)
         let (escape_mask, next_character_is_escaped) = escape_mask(backslashes);
         // Denote that the first character is escaped (if it is supposed to be)
@@ -83,11 +299,15 @@ pub mod parser64 {
         (escape_mask, first_character_is_escaped, next_character_is_escaped)
     }
 
-    fn find_strings(input: u8x64, escape_mask: u64, next_data: &NextData) -> (u64, u64) {
+    fn find_strings(input: Chunks, escape_mask: Bitmask, next_data: &NextData) -> (Bitmask, bool) {
         let quotes = (input.eq(QUOTES).bitmask() & !escape_mask) | next_data.still_in_string;
         let string_mask = runs_from_pairs(quotes);
-        let still_in_string = string_mask >> 63;
+        let still_in_string = (string_mask & TOP_BIT) != 0;
         (string_mask, still_in_string)
+    }
+
+    fn backslash_mask(input: u8x64) -> u64 {
+        input.eq(BACKSLASHES).bitmask()
     }
 
     ///
