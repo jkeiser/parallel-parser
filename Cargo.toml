@@ -6,6 +6,7 @@ edition = "2018"
 
 [dependencies]
 packed_simd = "*"
+num = "*"
 
 [dev-dependencies]
 criterion = "0.2"
