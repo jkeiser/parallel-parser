@@ -8,9 +8,9 @@ use std::ops;
 /// 
 /// Stored internally as u64x8, where:
 /// - bit 0 is u64x8.extract(0) & 0x1
-/// - bit 63 is u64x8.extract(0) & 0xFFFFFFFFFFFFFFFF
+/// - bit 63 is u64x8.extract(0) & 0xFFFFFFFF_FFFFFFFF
 /// - bit 64 is u64x8.extract(1) & 0x1
-/// - bit 511 is u64x8.extract(7) & 0xFFFFFFFFFFFFFFFF
+/// - bit 511 is u64x8.extract(7) & 0xFFFFFFFF_FFFFFFFF
 /// 
 #[derive(Copy,Clone,Debug)]
 pub struct U512(u64x8);
@@ -57,11 +57,11 @@ impl From<i128> for U512 {
 
 impl Bitmask for U512 {
     const SIZE: u32 = 512;
-    const NO_BITS: Self   = U512(u64x8::new(0x0000000000000000,0x0000000000000000,0x0000000000000000,0x0000000000000000,0x0000000000000000,0x0000000000000000,0x0000000000000000,0x0000000000000000));
-    const ALL_BITS: Self  = U512(u64x8::new(0xFFFFFFFFFFFFFFFF,0xFFFFFFFFFFFFFFFF,0xFFFFFFFFFFFFFFFF,0xFFFFFFFFFFFFFFFF,0xFFFFFFFFFFFFFFFF,0xFFFFFFFFFFFFFFFF,0xFFFFFFFFFFFFFFFF,0xFFFFFFFFFFFFFFFF));
-    const EVEN_BITS: Self = U512(u64x8::new(0x5555555555555555,0x5555555555555555,0x5555555555555555,0x5555555555555555,0x5555555555555555,0x5555555555555555,0x5555555555555555,0x5555555555555555));
-    const ODD_BITS: Self  = U512(u64x8::new(0xAAAAAAAAAAAAAAAA,0xAAAAAAAAAAAAAAAA,0xAAAAAAAAAAAAAAAA,0xAAAAAAAAAAAAAAAA,0xAAAAAAAAAAAAAAAA,0xAAAAAAAAAAAAAAAA,0xAAAAAAAAAAAAAAAA,0xAAAAAAAAAAAAAAAA));
-    const TOP_BIT: Self   = U512(u64x8::new(0x0000000000000000,0x0000000000000000,0x0000000000000000,0x0000000000000000,0x0000000000000000,0x0000000000000000,0x0000000000000000,0x8000000000000000));
+    const NO_BITS: Self   = U512(u64x8::new(0x00000000_00000000,0x00000000_00000000,0x00000000_00000000,0x00000000_00000000,0x00000000_00000000,0x00000000_00000000,0x00000000_00000000,0x00000000_00000000));
+    const ALL_BITS: Self  = U512(u64x8::new(0xFFFFFFFF_FFFFFFFF,0xFFFFFFFF_FFFFFFFF,0xFFFFFFFF_FFFFFFFF,0xFFFFFFFF_FFFFFFFF,0xFFFFFFFF_FFFFFFFF,0xFFFFFFFF_FFFFFFFF,0xFFFFFFFF_FFFFFFFF,0xFFFFFFFF_FFFFFFFF));
+    const EVEN_BITS: Self = U512(u64x8::new(0x55555555_55555555,0x55555555_55555555,0x55555555_55555555,0x55555555_55555555,0x55555555_55555555,0x55555555_55555555,0x55555555_55555555,0x55555555_55555555));
+    const ODD_BITS: Self  = U512(u64x8::new(0xAAAAAAAA_AAAAAAAA,0xAAAAAAAA_AAAAAAAA,0xAAAAAAAA_AAAAAAAA,0xAAAAAAAA_AAAAAAAA,0xAAAAAAAA_AAAAAAAA,0xAAAAAAAA_AAAAAAAA,0xAAAAAAAA_AAAAAAAA,0xAAAAAAAA_AAAAAAAA));
+    const TOP_BIT: Self   = U512(u64x8::new(0x00000000_00000000,0x00000000_00000000,0x00000000_00000000,0x00000000_00000000,0x00000000_00000000,0x00000000_00000000,0x00000000_00000000,0x80000000_00000000));
 }
 
 impl U512 {
@@ -191,26 +191,27 @@ impl U512 {
         // Instructions: 3 (+ > select)
         let half_add = self.0 + other.0;
         // Collect bits that actually carried, and put them into an 8 byte mask, with 1 in each byte that carried.
-        let carries = half_add.gt(self.0).select(u8x8::splat(1), u8x8::splat(0));
-        let overflow = carries.extract(7);
+        let carries = self.0.gt(half_add).bitmask();
 
         // Carry the 1s
         // NOTE: when 64 1's is uncommon, this is a lot of extra instructions. When it's not, it's
         // better than looping.
-        let carried: u64x8 = {
-            // Collect the "carrythrough mask"--i.e. any lane with FFFFFFFFFFFFFFFF becomes FF, and anything else becomes 00.
-            let carrythroughs = half_add.eq(u64x8::splat(u64::MAX));
-            let carrythrough_mask: u64 = unsafe { mem::transmute(
-                carrythroughs.select(u8x8::splat(0xFF), u8x8::splat(0x00)))
-            };
-            let carries: u64 = unsafe { mem::transmute(carries) };
-            // add the 2 u64s to cause the 1's travel *past* any FF's and fall into the non-FF "holes," making them == 1.
-            let carried: u8x8 = unsafe { mem::transmute((carries << 8) + carrythrough_mask) };
-            carried.eq(u8x8::splat(1)).select(u64x8::splat(1), u64x8::splat(0))
+        let (carry_add, overflowed) = {
+            // Collect the "carrythrough mask"--i.e. any lane with FFFFFFFF_FFFFFFFF becomes FF, and anything else becomes 00.
+            let carrythroughs = half_add.eq(u64x8::splat(u64::MAX)).bitmask();
+            // Add the carry bits to the FF's, which makes them travel *through*, landing on the first non-FF.
+            let (carried, carried_overflow) = carrythroughs.overflowing_add(carries << 1);
+            // Any bits that *change* need to be carried (either FF's that get flipped due to
+            // carrythrough, or non-FF's that have a carry bit on them), thus we xor with the original.
+            let carried = carried ^ carrythroughs;
+            // Turn the bitmask into a series of 1's
+            // TODO better way to turn a bitmask back into a series of 1's?
+            let carry_add = (u64x8::splat(carried as u64) >> u64x8::new(0,1,2,3,4,5,6,7)) & u64x8::splat(1);
+            (carry_add, carries & 0x80 > 0 || carried_overflow)
         };
 
         // Add the carries to the result
-        (U512(half_add + carried), overflow > 0)
+        (U512(half_add + carry_add), overflowed)
     }
 
     pub fn from_str_hex(string: &str) -> Result<Self, ParseIntError> {
@@ -254,7 +255,7 @@ impl U512 {
     }
 
     pub fn to_string_hex(self) -> String {
-        (0..8).rev().map(|i| format!("{:08x}", self.0.extract(i))).collect::<Vec<String>>().join("")
+        (0..8).rev().map(|i| format!("{:016x}", self.0.extract(i))).collect::<Vec<String>>().join("")
     }
 
     pub fn to_string_binary(self) -> String {
@@ -267,8 +268,10 @@ impl U512 {
             Self::from_str_hex(&literal[2..]).unwrap()
         } else if literal.starts_with("0b") {
             Self::from_str_binary(&literal[2..]).unwrap()
+        } else if !literal.starts_with("0") || literal == "0" {
+            u64::from_str_radix(&literal, 10).unwrap().into()
         } else {
-            panic!("u512::parse_literal() only works with 0x and 0b (hex and binary)");
+            panic!("u512::parse_literal() only works with decimal, 0x and 0b (hex and binary)");
         }
     }
 
@@ -414,6 +417,13 @@ impl<T: Into<U512>> ops::BitAnd<T> for U512 {
     }
 }
 
+impl<T: Into<U512>> ops::Add<T> for U512 {
+    type Output = Self;
+    fn add(self, other: T) -> U512 {
+        self.overflowing_add(other.into()).0
+    }
+}
+
 impl ops::Not for U512 {
     type Output = Self;
     fn not(self) -> U512 {
@@ -421,6 +431,7 @@ impl ops::Not for U512 {
     }
 }
 
+#[cfg(test)]
 mod tests {
     use super::U512;
 
@@ -463,7 +474,7 @@ mod tests {
     }
 
     #[test]
-    fn test_shifts() {
+    fn shifts() {
         let repeated = [
             "0000".repeat(16),
             "0001".repeat(16),
@@ -494,22 +505,112 @@ mod tests {
         }
     }
 
+    fn test_addition(a: U512, b: U512, expected: U512, expected_overflow: bool) {
+        assert_eq!(a + b, expected, "addition failed!\na:        {}\nb:        {}\nactual:   {}\nexpected: {}", a.to_string_hex(), b.to_string_hex(), (a + b).to_string_hex(), expected.to_string_hex());
+        assert_eq!(a.overflowing_add(b), (expected, expected_overflow));
+        assert_eq!(b + a, expected, "addition failed!\nb:        {}\na:        {}\nactual:   {}\nexpected: {}", b.to_string_hex(), a.to_string_hex(), (b + a).to_string_hex(), expected.to_string_hex());
+        assert_eq!(b.overflowing_add(a), (expected, expected_overflow));
+    }
+
+    macro_rules! test_add {
+        ($a:tt + $b:tt = $expected:tt (overflow)) => {
+            test_addition(u512_literal!($a), u512_literal!($b), u512_literal!($expected), true)
+        };
+        ($a:tt + $b:tt = $expected:tt (no overflow)) => {
+            test_addition(u512_literal!($a), u512_literal!($b), u512_literal!($expected), false)
+        };
+        ($a:tt + $b:tt = $expected:tt) => {
+            test_addition(u512_literal!($a), u512_literal!($b), u512_literal!($expected), false)
+        }
+    }
+
+    #[test]
+    fn add_u64() {
+        test_add! { 0 + 0 = 0 }
+        test_add! { 1 + 0 = 1 }
+        test_add! { 1 + 1 = 2 }
+    }
+
+    #[test]
+    fn add_u64_max() {
+        test_add! { 0xFFFFFFFF_FFFFFFFF + 0 = 0xFFFFFFFF_FFFFFFFF }
+        test_add! { 0xFFFFFFFF_FFFFFFFF + 1 = 0x1_00000000_00000000 }
+        test_add! { 0xFFFFFFFF_FFFFFFFF + 0x10000000_00000000 = 0x1_0FFFFFFF_FFFFFFFF }
+        test_add! { 0xF0000000_00000000 + 0x10000000_00000000 = 0x1_00000000_00000000 }
+        test_add! { 0xFFFFFFFF_F0000000 + 0x00000000_10000000 = 0x1_00000000_00000000 }
+        test_add! { 0xFFFFFFFF_FFFFFFFF + 0xFFFFFFFF_FFFFFFFF = 0x1_FFFFFFFF_FFFFFFFE }
+    }
+
+    #[test]
+    fn add_u128() {
+        test_add! { 0x1_00000000_00000000 + 0 = 0x1_00000000_00000000 }
+        test_add! { 0x1_00000000_00000000 + 1 = 0x1_00000000_00000001 }
+        test_add! { 0x0_FFFFFFFF_FFFFFFFF + 0x1_00000000_00000000 = 0x1_FFFFFFFF_FFFFFFFF }
+        test_add! { 0x1_FFFFFFFF_FFFFFFFF + 1 = 0x2_00000000_00000000 }
+        test_add! { 0x2_FFFFFFFF_FFFFFFFF + 1 = 0x3_00000000_00000000 }
+    }
+
+    #[test]
+    fn add_u128_max() {
+        test_add! { 0xFFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF + 0 = 0xFFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF }
+        test_add! { 0xFFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF + 1 = 0x1_00000000_00000000_00000000_00000000 }
+        test_add! { 0xFFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF + 0x10000000_00000000_00000000_00000000 = 0x1_0FFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF }
+        test_add! { 0xFFFFFFFF_FFFFFFFF_F0000000_00000000 + 0x00000000_00000000_10000000_00000000 = 0x1_00000000_00000000_00000000_00000000 }
+        test_add! { 0xFFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF + 0xFFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF = 0x1_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFE }
+    }
+
+    #[test]
+    fn add_u256() {
+        test_add! { 0x1_00000000_00000000_00000000_00000000 + 0 = 0x1_00000000_00000000_00000000_00000000 }
+        test_add! { 0x1_00000000_00000000_00000000_00000000 + 1 = 0x1_00000000_00000000_00000000_00000001 }
+        test_add! { 0x0_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF + 0x1_00000000_00000000_00000000_00000000 = 0x1_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF }
+        test_add! { 0x1_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF + 1 = 0x2_00000000_00000000_00000000_00000000 }
+        test_add! { 0x2_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF + 1 = 0x3_00000000_00000000_00000000_00000000 }
+    }
+
+    #[test]
+    fn add_u256_max() {
+        test_add! { 0xFFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF + 0 = 0xFFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF }
+        test_add! { 0xFFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF + 1 = 0x1_00000000_00000000_00000000_00000000_00000000_00000000_00000000_00000000 }
+        test_add! { 0xFFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF + 0x10000000_00000000_00000000_00000000_00000000_00000000_00000000_00000000 = 0x1_0FFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF }
+        test_add! { 0xFFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_F0000000_00000000_00000000_00000000 + 0x00000000_00000000_00000000_00000000_10000000_00000000_00000000_00000000 = 0x1_00000000_00000000_00000000_00000000_00000000_00000000_00000000_00000000 }
+        test_add! { 0xFFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF + 0xFFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF = 0x1_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFE }
+    }
+
+    #[test]
+    fn add_u512() {
+        test_add! { 0x1_00000000_00000000_00000000_00000000_00000000_00000000_00000000_00000000 + 0                                                                           = 0x1_00000000_00000000_00000000_00000000_00000000_00000000_00000000_00000000 }
+        test_add! { 0x1_00000000_00000000_00000000_00000000_00000000_00000000_00000000_00000000 + 1                                                                           = 0x1_00000000_00000000_00000000_00000000_00000000_00000000_00000000_00000001 }
+        test_add! { 0x0_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF + 0x1_00000000_00000000_00000000_00000000_00000000_00000000_00000000_00000000 = 0x1_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF }
+        test_add! { 0x1_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF + 1                                                                           = 0x2_00000000_00000000_00000000_00000000_00000000_00000000_00000000_00000000 }
+        test_add! { 0x2_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF + 1                                                                           = 0x3_00000000_00000000_00000000_00000000_00000000_00000000_00000000_00000000 }
+    }
+
+    #[test]
+    fn add_u512_max() {
+        test_add! { 0xFFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF + 0 = 0xFFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF }
+        test_add! { 0xFFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF + 1 = 0 (overflow) }
+        test_add! { 0xFFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF + 0x10000000_00000000_00000000_00000000_00000000_00000000_00000000_00000000_00000000_00000000_00000000_00000000_00000000_00000000_00000000_00000000 = 0x0FFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF (overflow) }
+        test_add! { 0xFFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_F0000000_00000000_00000000_00000000_00000000_00000000_00000000_00000000 + 0x00000000_00000000_00000000_00000000_00000000_00000000_00000000_00000000_10000000_00000000_00000000_00000000_00000000_00000000_00000000_00000000 = 0x00000000_00000000_00000000_00000000_0000000_00000000_00000000_00000000_00000000_00000000_00000000_00000000_0000000_00000000_00000000_00000000 (overflow) }
+        test_add! { 0xFFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF + 0xFFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF = 0xFFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFE (overflow) }
+    }
+
     #[test]
     fn ror_128() {
-        let x = u512_literal!(0x1111111111111111_2222222222222222_3333333333333333_4444444444444444_5555555555555555_6666666666666666_7777777777777777_8888888888888888);
-        assert_eq!(x.rotate_right(128), u512_literal!(0x7777777777777777_8888888888888888_1111111111111111_2222222222222222_3333333333333333_4444444444444444_5555555555555555_6666666666666666));
+        let x = u512_literal!(0x11111111_11111111_2222222222222222_3333333333333333_4444444444444444_5555555555555555_6666666666666666_7777777777777777_8888888888888888);
+        assert_eq!(x.rotate_right(128), u512_literal!(0x77777777_77777777_8888888888888888_1111111111111111_2222222222222222_3333333333333333_4444444444444444_5555555555555555_6666666666666666));
     }
 
     #[test]
     fn rol_128() {
-        let x = u512_literal!(0x1111111111111111_2222222222222222_3333333333333333_4444444444444444_5555555555555555_6666666666666666_7777777777777777_8888888888888888);
-        assert_eq!(x.rotate_left(128), u512_literal!(0x3333333333333333_4444444444444444_5555555555555555_6666666666666666_7777777777777777_8888888888888888_1111111111111111_2222222222222222));
+        let x = u512_literal!(0x11111111_11111111_2222222222222222_3333333333333333_4444444444444444_5555555555555555_6666666666666666_7777777777777777_8888888888888888);
+        assert_eq!(x.rotate_left(128), u512_literal!(0x33333333_33333333_4444444444444444_5555555555555555_6666666666666666_7777777777777777_8888888888888888_1111111111111111_2222222222222222));
     }
     #[test]
     fn check_it() {
         use std::mem;
         let u8_8: [u8;8] = [0x00,0x11,0x22,0x33,0x44,0x55,0x66,0x77];
-        let u64_as_u64: u64 = 0x7766554433221100;
+        let u64_as_u64: u64 = 0x77665544_33221100;
         let u64_as_u8: [u8;8] = unsafe { mem::transmute(u64_as_u64) };
         assert_eq!(u8_8,u64_as_u8);
     }
