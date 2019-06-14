@@ -5,19 +5,29 @@ use std::num::*;
 use std::ops::*;
 use std::result::Result;
 use std::str::*;
+use std::mem::size_of;
+use packed_simd::*;
 
-pub trait NativeInteger:
-    Copy + Clone + Default + Hash + FromStr +
-    Eq + Ord +
-    LowerHex + UpperHex + Octal + Binary + Debug + Display +
+pub trait PrimitiveBase:
+    Copy + Clone + Default + Hash + Debug +
+    PartialEq<Self> + Eq + PartialOrd<Self> + Ord +
+    Send + Sync + Sized
+{
+    const NUM_BYTES: usize = size_of::<Self>();
+    const NUM_BITS: u32 = Self::NUM_BYTES as u32 * 8;
+    type Mask: PrimitiveMask;
+}
+
+pub trait PrimitiveInteger: PrimitiveBase +
+    FromStr + LowerHex + UpperHex + Octal + Binary + Display +
     Add<Self, Output=Self> + Sub<Self, Output=Self> + Div<Self> + Rem<Self, Output=Self> + Mul<Self, Output=Self> +
     BitAnd<Self, Output=Self> + BitXor<Self, Output=Self> + BitOr<Self, Output=Self> + Not<Output=Self> +
-    Shl<Self, Output=Self> + Shr<Self, Output=Self> +
-    Send + Sync {
+    Shl<Self, Output=Self> + Shr<Self, Output=Self>
+{
     const MAX: Self;
     const MIN: Self;
-    const WIDTH: u32;
-    const NUM_BYTES: usize = Self::WIDTH as usize / 8;
+    fn min_value() -> Self;
+    fn max_value() -> Self;
     fn from_str_radix(src: &str, radix: u32) -> Result<Self, ParseIntError>;
     fn count_ones(self) -> u32;
     fn count_zeros(self) -> u32;
@@ -71,13 +81,13 @@ pub trait NativeInteger:
     // fn from_ne_bytes(bytes: [u8; Self::NUM_BYTES]) -> Self;
 }
 
-pub trait NativeUnsigned: NativeInteger {
+pub trait PrimitiveUnsigned: PrimitiveInteger {
     fn is_power_of_two(self) -> bool;
     fn next_power_of_two(self) -> Self;
     fn checked_next_power_of_two(self) -> Option<Self>;
 }
 
-pub trait NativeSigned: NativeInteger {
+pub trait PrimitiveSigned: PrimitiveInteger {
     fn checked_abs(self) -> Option<Self>;
     fn wrapping_abs(self) -> Self;
     fn overflowing_abs(self) -> (Self, bool);
@@ -87,13 +97,28 @@ pub trait NativeSigned: NativeInteger {
     fn is_negative(self) -> bool;
 }
 
+pub trait PrimitiveMask: PrimitiveBase {
+    fn new(x: bool) -> Self;
+    fn test(&self) -> bool;
+}
+
+macro_rules! impl_native_bytes {
+    ( $type:ident, $mask:ident ) => {
+        impl PrimitiveBase for $type {
+            type Mask = $mask;
+        }
+    }
+}
+
 macro_rules! impl_native_integer {
-    ( $type:ident ) => {
+    ( $type:ident, $mask:ident ) => {
+        impl_native_bytes!($type, $mask);
         use std::$type;
-        impl NativeInteger for $type {
-            const MAX: Self = $type::MAX;
-            const MIN: Self = $type::MIN;
-            const WIDTH: u32 = $type::MAX.count_ones();
+        impl PrimitiveInteger for $type {
+            const MAX: Self = <$type>::min_value();
+            const MIN: Self = <$type>::max_value();
+            fn min_value() -> Self { <$type>::min_value() }
+            fn max_value() -> Self { <$type>::max_value() }
             fn from_str_radix(src: &str, radix: u32) -> Result<Self, ParseIntError> { <$type>::from_str_radix(src, radix) }
             fn count_ones(self) -> u32 { self.count_ones() }
             fn count_zeros(self) -> u32 { self.count_zeros() }
@@ -150,9 +175,9 @@ macro_rules! impl_native_integer {
 }
 
 macro_rules! impl_native_unsigned {
-    ( $type:ident ) => {
-        impl_native_integer!($type);
-        impl NativeUnsigned for $type {
+    ( $type:ident, $mask:ident ) => {
+        impl_native_integer!($type, $mask);
+        impl PrimitiveUnsigned for $type {
             fn is_power_of_two(self) -> bool { self.is_power_of_two() }
             fn next_power_of_two(self) -> Self { self.next_power_of_two() }
             fn checked_next_power_of_two(self) -> Option<Self> { self.checked_next_power_of_two() }
@@ -161,9 +186,9 @@ macro_rules! impl_native_unsigned {
 }
 
 macro_rules! impl_native_signed {
-    ( $type:ident ) => {
-        impl_native_integer!($type);
-        impl NativeSigned for $type {
+    ( $type:ident, $mask:ident ) => {
+        impl_native_integer!($type, $mask);
+        impl PrimitiveSigned for $type {
             fn checked_abs(self) -> Option<Self> { self.checked_abs() }
             fn wrapping_abs(self) -> Self { self.wrapping_abs() }
             fn overflowing_abs(self) -> (Self, bool) { self.overflowing_abs() }
@@ -175,27 +200,43 @@ macro_rules! impl_native_signed {
     }
 }
 
-impl_native_unsigned!(u8);
-impl_native_unsigned!(u16);
-impl_native_unsigned!(u32);
-impl_native_unsigned!(u64);
-impl_native_unsigned!(u128);
-impl_native_signed!(i8);
-impl_native_signed!(i16);
-impl_native_signed!(i32);
-impl_native_signed!(i64);
-impl_native_signed!(i128);
+macro_rules! impl_native_mask {
+    ( $type:ident ) => {
+        impl_native_bytes!($type, $type);
+        impl PrimitiveMask for $type {
+            fn new(x: bool) -> Self { <$type>::new(x) }
+            fn test(&self) -> bool { self.test() }
+        }
+    }
+}
+
+impl_native_unsigned!(u8, m8);
+impl_native_unsigned!(u16, m16);
+impl_native_unsigned!(u32, m32);
+impl_native_unsigned!(u64, m64);
+impl_native_unsigned!(u128, m128);
+impl_native_signed!(i8, m8);
+impl_native_signed!(i16, m16);
+impl_native_signed!(i32, m32);
+impl_native_signed!(i64, m64);
+impl_native_signed!(i128, m128);
+impl_native_mask!(m8);
+impl_native_mask!(m16);
+impl_native_mask!(m32);
+impl_native_mask!(m64);
+impl_native_mask!(m128);
 
 #[cfg(test)]
 mod tests {
-    use super::NativeInteger;
-    fn min_value<T: NativeInteger>() -> T { T::MIN }
-    fn count_ones<T: NativeInteger>(t: T) -> u32 { t.count_ones() }
+    use super::*;
+    fn min_value<T: PrimitiveInteger>() -> T { T::MIN }
+    fn count_ones<T: PrimitiveInteger>(t: T) -> u32 { t.count_ones() }
 
     #[test]
     fn no_recursion() {
         assert_eq!(min_value::<u64>(), 0 as u64);
-        assert_eq!(<u64 as NativeInteger>::WIDTH, 64);
+        assert_eq!(u64::NUM_BITS, 64);
+        assert_eq!(u64::NUM_BYTES, 64);
         assert_eq!(count_ones(2 as u64), 1);
     }
 }
