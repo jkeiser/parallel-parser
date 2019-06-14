@@ -3,10 +3,10 @@ use packed_simd::*;
 
 pub type Bitmask = u64x8;
 pub type Chunks = [u8x64;NUM_CHUNKS];
-pub type Bytes = [u8;NUM_BYTES];
+pub type Bytes = [u8;BYTE_WIDTH];
 pub const BYTES_PER_CHUNK: usize = 64;
 pub const NUM_CHUNKS: usize = 8;
-pub const NUM_BYTES: usize = NUM_CHUNKS*BYTES_PER_CHUNK;
+pub const BYTE_WIDTH: usize = NUM_CHUNKS*BYTES_PER_CHUNK;
 
 pub struct BlockData {
     pub escape_mask: Bitmask,

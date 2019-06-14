@@ -1,3 +1,4 @@
+use std::convert::TryFrom;
 use std;
 use std::fmt::*;
 use std::hash::*;
@@ -13,16 +14,22 @@ pub trait PrimitiveBase:
     PartialEq<Self> + Eq + PartialOrd<Self> + Ord +
     Send + Sync + Sized
 {
-    const NUM_BYTES: usize = size_of::<Self>();
-    const NUM_BITS: u32 = Self::NUM_BYTES as u32 * 8;
+    const BYTE_WIDTH: usize = size_of::<Self>();
+    const BIT_WIDTH: u32 = Self::BYTE_WIDTH as u32 * 8;
     type Mask: PrimitiveMask;
 }
 
 pub trait PrimitiveInteger: PrimitiveBase +
+    From<bool> +
+    TryFrom<u8> + TryFrom<u16> + TryFrom<u32> + TryFrom<u64> + TryFrom<u128> + TryFrom<usize> +
+    TryFrom<i8> + TryFrom<i16> + TryFrom<i32> + TryFrom<i64> + TryFrom<i128> + TryFrom<isize> +
     FromStr + LowerHex + UpperHex + Octal + Binary + Display +
-    Add<Self, Output=Self> + Sub<Self, Output=Self> + Div<Self> + Rem<Self, Output=Self> + Mul<Self, Output=Self> +
+    Add<Self, Output=Self> + Sub<Self, Output=Self> + Div<Self, Output=Self> + Rem<Self, Output=Self> + Mul<Self, Output=Self> +
+    AddAssign<Self> + SubAssign<Self> + DivAssign<Self> + RemAssign<Self> + MulAssign<Self> +
     BitAnd<Self, Output=Self> + BitXor<Self, Output=Self> + BitOr<Self, Output=Self> + Not<Output=Self> +
-    Shl<Self, Output=Self> + Shr<Self, Output=Self>
+    BitAndAssign<Self> + BitXorAssign<Self> + BitOrAssign<Self> +
+    Shl<u32, Output=Self> + Shr<u32, Output=Self> +
+    ShlAssign<u32> + ShrAssign<u32>
 {
     const MAX: Self;
     const MIN: Self;
@@ -73,21 +80,21 @@ pub trait PrimitiveInteger: PrimitiveBase +
     fn overflowing_shr(self, rhs: u32) -> (Self, bool);
     fn overflowing_pow(self, exp: u32) -> (Self, bool);
     fn pow(self, exp: u32) -> Self;
-    // fn to_be_bytes(self) -> [u8; Self::NUM_BYTES];;
-    // fn to_le_bytes(self) -> [u8; Self::NUM_BYTES];
-    // fn to_ne_bytes(self) -> [u8; Self::NUM_BYTES];
-    // fn from_be_bytes(bytes: [u8; Self::NUM_BYTES]) -> Self;
-    // fn from_le_bytes(bytes: [u8; Self::NUM_BYTES]) -> Self;
-    // fn from_ne_bytes(bytes: [u8; Self::NUM_BYTES]) -> Self;
+    // fn to_be_bytes(self) -> [u8; Self::BYTE_WIDTH];;
+    // fn to_le_bytes(self) -> [u8; Self::BYTE_WIDTH];
+    // fn to_ne_bytes(self) -> [u8; Self::BYTE_WIDTH];
+    // fn from_be_bytes(bytes: [u8; Self::BYTE_WIDTH]) -> Self;
+    // fn from_le_bytes(bytes: [u8; Self::BYTE_WIDTH]) -> Self;
+    // fn from_ne_bytes(bytes: [u8; Self::BYTE_WIDTH]) -> Self;
 }
 
-pub trait PrimitiveUnsigned: PrimitiveInteger {
+pub trait PrimitiveUnsigned: PrimitiveInteger + From<u8> {
     fn is_power_of_two(self) -> bool;
     fn next_power_of_two(self) -> Self;
     fn checked_next_power_of_two(self) -> Option<Self>;
 }
 
-pub trait PrimitiveSigned: PrimitiveInteger {
+pub trait PrimitiveSigned: PrimitiveInteger + From<i8> {
     fn checked_abs(self) -> Option<Self>;
     fn wrapping_abs(self) -> Self;
     fn overflowing_abs(self) -> (Self, bool);
@@ -215,16 +222,19 @@ impl_native_unsigned!(u16, m16);
 impl_native_unsigned!(u32, m32);
 impl_native_unsigned!(u64, m64);
 impl_native_unsigned!(u128, m128);
+impl_native_unsigned!(usize, msize);
 impl_native_signed!(i8, m8);
 impl_native_signed!(i16, m16);
 impl_native_signed!(i32, m32);
 impl_native_signed!(i64, m64);
 impl_native_signed!(i128, m128);
+impl_native_signed!(isize, msize);
 impl_native_mask!(m8);
 impl_native_mask!(m16);
 impl_native_mask!(m32);
 impl_native_mask!(m64);
 impl_native_mask!(m128);
+impl_native_mask!(msize);
 
 #[cfg(test)]
 mod tests {
@@ -235,8 +245,8 @@ mod tests {
     #[test]
     fn no_recursion() {
         assert_eq!(min_value::<u64>(), 0 as u64);
-        assert_eq!(u64::NUM_BITS, 64);
-        assert_eq!(u64::NUM_BYTES, 64);
+        assert_eq!(u64::BIT_WIDTH, 64);
+        assert_eq!(u64::BYTE_WIDTH, 64);
         assert_eq!(count_ones(2 as u64), 1);
     }
 }

@@ -1,17 +1,20 @@
 use packed_simd::*;
-use crate::bitmask::Bitmask as _;
+use crate::streamable_bitmask::*;
 use crate::carryless_mul::CarrylessMul;
 
-pub type Bitmask = u64;
-pub type Chunks = u8x64;
-pub type Bytes = [u8;NUM_BYTES];
+
+
+type Mask = u64x8;
+type Bitmask = u64;
+type Bytes = [u8;Chunks::BYTE_WIDTH];
 pub const BYTES_PER_CHUNK: usize = 1;
 pub const NUM_CHUNKS: usize = 1;
-pub const NUM_BYTES: usize = NUM_CHUNKS*BYTES_PER_CHUNK;
+pub const BYTE_WIDTH: usize = NUM_CHUNKS*BYTES_PER_CHUNK;
+
 
 pub struct BlockData {
-    pub escape_mask: Bitmask,
-    pub string_mask: Bitmask,
+    pub escape_mask: Chunks::Bitmask,
+    pub string_mask: Chunks::Bitmask,
     pub first_character_is_escaped: bool,
 }
 pub struct NextData {
@@ -33,7 +36,8 @@ pub fn backslash_mask(input: u8x64) -> u64 {
 const BACKSLASHES: Chunks = u8x64::splat(b'\\');
 const QUOTES: Chunks = u8x64::splat(b'"');
 
-fn find_backslashes(input: Chunks, next_data: &NextData) -> (u64, bool, bool) {
+fn find_backslashes<T: Maskable<u8>>(input: T, prev_overflow: bool) -> (u64, bool, bool) {
+    let backslashes = input.where_eq('\\');
     let first_character_is_escaped = next_data.next_character_is_escaped;
     // If the first character is escaped, pretend it's not a backslash
     let backslashes = backslash_mask(input) & !(first_character_is_escaped as u64);

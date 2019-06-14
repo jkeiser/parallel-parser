@@ -4,7 +4,10 @@ use std::fmt::*;
 use std::iter::{Product,Sum};
 use std::ops::*;
 use std::hash::Hash;
-
+#[cfg(target_arch = "x86")]
+use std::arch::x86::*;
+#[cfg(target_arch = "x86_64")]
+use std::arch::x86_64::*;
 
 pub trait SimdBase: Copy+Clone+Default+Sized
                    +PartialEq<Self>+Eq
@@ -36,12 +39,13 @@ pub trait SimdBase: Copy+Clone+Default+Sized
 // From<Simd<[u16; 8]>>
 // From<Simd<[u32; 8]>>
     const LANES: usize;
-    const BIT_WIDTH: u32 = Self::LANES as u32 * Self::LaneStorageType::NUM_BITS;
-    const BYTE_WIDTH: usize = Self::LANES * Self::LaneStorageType::NUM_BYTES;
+    const BIT_WIDTH: u32 = Self::LANES as u32 * Self::LaneStorageType::BIT_WIDTH;
+    const BYTE_WIDTH: usize = Self::LANES * Self::LaneStorageType::BYTE_WIDTH;
     type LaneStorageType: PrimitiveBase;
-    type LaneType;
-    type Mask: SimdMask;
-    type BitmaskResult: PrimitiveUnsigned;
+    type LaneType: Copy+Clone+Debug;
+    type Mask: SimdMask<Bitmask=Self::Bitmask>;
+    type Bitmask: PrimitiveUnsigned;
+    type IntrinsicType;
 
     fn lanes() -> usize;
     fn splat(value: Self::LaneType) -> Self;
@@ -63,7 +67,7 @@ pub trait SimdBase: Copy+Clone+Default+Sized
     fn ge(self, other: Self) -> Self::Mask;
     fn partial_lex_ord(&self) -> LexicographicallyOrdered<Self>;
     fn lex_ord(&self) -> LexicographicallyOrdered<Self>;
-    fn bitmask(self) -> Self::BitmaskResult;
+    fn bitmask(self) -> Self::Bitmask;
 }
 
 pub trait SimdInteger: SimdBase
@@ -121,12 +125,13 @@ pub trait SimdMask: SimdBase {
 }
 
 macro_rules! impl_simd_base {
-    ($simd:ty, $storage:ident, $value:ident, $mask:ty, $bitmask:ident) => {
+    ($simd:ty, $storage:ident, $value:ident, $mask:ty, $bitmask:ident, $intrinsic:ty) => {
         impl SimdBase for $simd {
             type LaneStorageType = $storage;
             type LaneType = $value;
             type Mask = $mask;
-            type BitmaskResult = $bitmask;
+            type Bitmask = $bitmask;
+            type IntrinsicType = $intrinsic;
             // type Mask = $mask;
             const LANES: usize = Self::lanes();
 
@@ -150,14 +155,14 @@ macro_rules! impl_simd_base {
             fn ge(self, other: Self) -> Self::Mask { self.ge(other) }
             fn partial_lex_ord(&self) -> LexicographicallyOrdered<Self> { self.partial_lex_ord() }
             fn lex_ord(&self) -> LexicographicallyOrdered<Self> { self.lex_ord() }
-            fn bitmask(self) -> Self::BitmaskResult { self.bitmask() }
+            fn bitmask(self) -> Self::Bitmask { self.bitmask() }
         }
     }
 }
 
 macro_rules! impl_simd_integer {
     ($simd:ty, $int:ident, $mask:ty, $bitmask:ident) => {
-        impl_simd_base!($simd, $int, $int, $mask, $bitmask);
+        impl_simd_base!($simd, $int, $int, $mask, $bitmask, <$mask as SimdBase>::IntrinsicType);
         impl SimdInteger for $simd {
             fn rotate_left(self, n: Self) -> Self { self.rotate_left(n) }
             fn rotate_right(self, n: Self) -> Self { self.rotate_right(n) }
@@ -205,8 +210,8 @@ macro_rules! impl_simd_signed {
 }
 
 macro_rules! impl_simd_mask {
-    ($simd:ty, $prim:ident, $bitmask:ident) => {
-        impl_simd_base!($simd, $prim, bool, $simd, $bitmask);
+    ($simd:ty, $prim:ident, $bitmask:ident, $intrinsic:ident) => {
+        impl_simd_base!($simd, $prim, bool, $simd, $bitmask, $intrinsic);
         impl SimdMask for $simd {
             fn all(self) -> bool { self.all() }
             fn any(self) -> bool { self.any() }
@@ -241,6 +246,10 @@ impl_simd_unsigned!(u64x8, u64, m64x8, u8);
 impl_simd_unsigned!(u128x2, u128, m128x2, u8);
 impl_simd_unsigned!(u128x4, u128, m128x4, u8);
 
+impl_simd_unsigned!(usizex2, usize, msizex2, u8);
+impl_simd_unsigned!(usizex4, usize, msizex4, u8);
+impl_simd_unsigned!(usizex8, usize, msizex8, u8);
+
 impl_simd_signed!(i8x2, i8, m8x2, u8);
 impl_simd_signed!(i8x4, i8, m8x4, u8);
 impl_simd_signed!(i8x8, i8, m8x8, u8);
@@ -263,30 +272,38 @@ impl_simd_signed!(i64x2, i64, m64x2, u8);
 impl_simd_signed!(i64x4, i64, m64x4, u8);
 impl_simd_signed!(i64x8, i64, m64x8, u8);
 
+impl_simd_signed!(isizex2, isize, msizex2, u8);
+impl_simd_signed!(isizex4, isize, msizex4, u8);
+impl_simd_signed!(isizex8, isize, msizex8, u8);
+
 impl_simd_signed!(i128x2, i128, m128x2, u8);
 impl_simd_signed!(i128x4, i128, m128x4, u8);
 
-impl_simd_mask!(m8x2, m8, u8);
-impl_simd_mask!(m8x4, m8, u8);
-impl_simd_mask!(m8x8, m8, u8);
-impl_simd_mask!(m8x16, m8, u16);
-impl_simd_mask!(m8x32, m8, u32);
-impl_simd_mask!(m8x64, m8, u64);
+impl_simd_mask!(m8x2, m8, u8, u16);
+impl_simd_mask!(m8x4, m8, u8, u32);
+impl_simd_mask!(m8x8, m8, u8, u64);
+impl_simd_mask!(m8x16, m8, u16, __m128i);
+impl_simd_mask!(m8x32, m8, u32, __m256i);
+impl_simd_mask!(m8x64, m8, u64, __m512i);
 
-impl_simd_mask!(m16x2, m16, u8);
-impl_simd_mask!(m16x4, m16, u8);
-impl_simd_mask!(m16x8, m16, u8);
-impl_simd_mask!(m16x16, m16, u16);
-impl_simd_mask!(m16x32, m16, u32);
+impl_simd_mask!(m16x2, m16, u8, u32);
+impl_simd_mask!(m16x4, m16, u8, u64);
+impl_simd_mask!(m16x8, m16, u8, __m128i);
+impl_simd_mask!(m16x16, m16, u16, __m256i);
+impl_simd_mask!(m16x32, m16, u32, __m512i);
 
-impl_simd_mask!(m32x2, m32, u8);
-impl_simd_mask!(m32x4, m32, u8);
-impl_simd_mask!(m32x8, m32, u8);
-impl_simd_mask!(m32x16, m32, u16);
+impl_simd_mask!(m32x2, m32, u8, u64);
+impl_simd_mask!(m32x4, m32, u8, __m128i);
+impl_simd_mask!(m32x8, m32, u8, __m256i);
+impl_simd_mask!(m32x16, m32, u16, __m512i);
 
-impl_simd_mask!(m64x2, m64, u8);
-impl_simd_mask!(m64x4, m64, u8);
-impl_simd_mask!(m64x8, m64, u8);
+impl_simd_mask!(m64x2, m64, u8, __m128i);
+impl_simd_mask!(m64x4, m64, u8, __m256i);
+impl_simd_mask!(m64x8, m64, u8, __m512i);
 
-impl_simd_mask!(m128x2, m128, u8);
-impl_simd_mask!(m128x4, m128, u8);
+impl_simd_mask!(m128x2, m128, u8, __m256i);
+impl_simd_mask!(m128x4, m128, u8, __m512i);
+
+impl_simd_mask!(msizex2, msize, u8, __m512i);
+impl_simd_mask!(msizex4, msize, u8, __m512i);
+impl_simd_mask!(msizex8, msize, u8, __m512i);
