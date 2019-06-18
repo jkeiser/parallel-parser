@@ -303,8 +303,7 @@ mod tests {
         expected
     }
 
-    fn test_prev(input: &str) {
-        let input = input.as_bytes();
+    fn test_prev(input: &[u8]) {
         let expected = expected_prev(input, 1);
         scan_overflow(chunks64(input).zip(chunks64(&expected)), |(chunk,expected), overflow| {
             let expected_mask = expected.where_eq(b'X');
@@ -315,8 +314,7 @@ mod tests {
         }).for_each(|_|());
     }
 
-    fn test_back(input: &str, count: usize) {
-        let input = input.as_bytes();
+    fn test_back(input: &[u8], count: usize) {
         let expected = expected_prev(input, count);
         scan_overflow(chunks64(input).zip(chunks64(&expected)), |(chunk, expected), overflow| {
             let expected_mask = expected.where_eq(b'X');
@@ -327,10 +325,9 @@ mod tests {
         }).for_each(|_|());
     }
 
-    fn test_prev_3(input: &str) {
+    fn test_prev_3(input: &[u8]) {
         println!("-----------------------------");
-        println!("{:>9}: {}", "input", input);
-        let input = input.as_bytes();
+        println!("{:>9}: {}", "input", str::from_utf8(input).unwrap());
         let expected = expected_prev(input, 1);
         let expected2 = expected_prev(input, 2);
         let expected3 = expected_prev(input, 3);
@@ -366,29 +363,96 @@ mod tests {
     }
 
     #[test]
+    fn any() {
+        let input = chunks64("                                                                                                                                ".as_bytes());
+        assert_eq!(input.map(|input| input.where_eq(b'X').any()).collect::<Vec<bool>>(), vec![false,false]);
+        let input = chunks64("XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX".as_bytes());
+        assert_eq!(input.map(|input| input.where_eq(b'X').any()).collect::<Vec<bool>>(), vec![true,true]);
+        let input = chunks64("XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX                                                                ".as_bytes());
+        assert_eq!(input.map(|input| input.where_eq(b'X').any()).collect::<Vec<bool>>(), vec![true,false]);
+        let input = chunks64("                                                                XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX".as_bytes());
+        assert_eq!(input.map(|input| input.where_eq(b'X').any()).collect::<Vec<bool>>(), vec![false,true]);
+        let input = chunks64("X                                                                   X                                                           ".as_bytes());
+        assert_eq!(input.map(|input| input.where_eq(b'X').any()).collect::<Vec<bool>>(), vec![true,true]);
+        let input = chunks64("X                                                                                                                               ".as_bytes());
+        assert_eq!(input.map(|input| input.where_eq(b'X').any()).collect::<Vec<bool>>(), vec![true,false]);
+        let input = chunks64("                                                                    X                                                           ".as_bytes());
+        assert_eq!(input.map(|input| input.where_eq(b'X').any()).collect::<Vec<bool>>(), vec![false,true]);
+    }
+
+    #[test]
+    fn all() {
+        let input = chunks64("                                                                                                                                ".as_bytes());
+        assert_eq!(input.map(|input| input.where_eq(b'X').all()).collect::<Vec<bool>>(), vec![false,false]);
+        let input = chunks64("XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX".as_bytes());
+        assert_eq!(input.map(|input| input.where_eq(b'X').all()).collect::<Vec<bool>>(), vec![true,true]);
+        let input = chunks64("XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX                                                                ".as_bytes());
+        assert_eq!(input.map(|input| input.where_eq(b'X').all()).collect::<Vec<bool>>(), vec![true,false]);
+        let input = chunks64("                                                                XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX".as_bytes());
+        assert_eq!(input.map(|input| input.where_eq(b'X').all()).collect::<Vec<bool>>(), vec![false,true]);
+        let input = chunks64("X                                                                   X                                                           ".as_bytes());
+        assert_eq!(input.map(|input| input.where_eq(b'X').all()).collect::<Vec<bool>>(), vec![false,false]);
+        let input = chunks64("X                                                                                                                               ".as_bytes());
+        assert_eq!(input.map(|input| input.where_eq(b'X').all()).collect::<Vec<bool>>(), vec![false,false]);
+        let input = chunks64("                                                                    X                                                           ".as_bytes());
+        assert_eq!(input.map(|input| input.where_eq(b'X').all()).collect::<Vec<bool>>(), vec![false,false]);
+    }
+
+    #[test]
     fn prev() {
-        test_prev("     X   X X    X X X  X X X X X    X X  X X    X X   X   X X X   X    X  X  X    X    X     X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X ");
-        test_prev("     X   X X    X X X  X X X X X    X X  X X    X X   X   X X X   X    X  X  X    X    X    X X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X X");
-        test_prev(" X    X   X X    X X X  X X X X X    X X  X X    X X   X   X X X   X    X  X  X    X    X     X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X X");
-        test_prev(" X    X   X X    X X X  X X X X X    X X  X X    X X   X   X X X   X    X  X  X    X    X    X X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X X");
+        test_prev(b"     X   X X    X X X  X X X X X    X X  X X    X X   X   X X X   X    X  X  X    X    X     X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X ");
+        test_prev(b"     X   X X    X X X  X X X X X    X X  X X    X X   X   X X X   X    X  X  X    X    X    X X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X X");
+        test_prev(b" X    X   X X    X X X  X X X X X    X X  X X    X X   X   X X X   X    X  X  X    X    X     X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X X");
+        test_prev(b" X    X   X X    X X X  X X X X X    X X  X X    X X   X   X X X   X    X  X  X    X    X    X X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X X");
     }
 
     #[test]
     fn back() {
-        test_back(" X X     X   X X    X X X  X X X X X    X X  X X    X X   X   X X X   X    X  X  X    X    X   X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X ", 2);
-        test_back("   X    X   X X    X X X  X X X X X    X X  X X    X X   X   X X X   X    X  X  X    X    X    X X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X X", 2);
-        test_back(" X X X    X   X X    X X X  X X X X X    X X  X X    X X   X   X X X   X    X  X  X    X    X  X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X X", 2);
-        test_back("       X   X X    X X X  X X X X X    X X  X X    X X   X   X X X   X    X  X  X    X    X    X_ X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X X", 2);
-        test_back(" X X     X   X X    X X X  X X X X X    X X  X X    X X   X   X X X   X    X  X  X    X    X   X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X ", 3);
-        test_back("   X    X   X X    X X X  X X X X X    X X  X X    X X   X   X X X   X    X  X  X    X    X    X X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X X", 3);
-        test_back(" X X X    X   X X    X X X  X X X X X    X X  X X    X X   X   X X X   X    X  X  X    X    X  X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X X", 3);
-        test_back("       X   X X    X X X  X X X X X    X X  X X    X X   X   X X X   X    X  X  X    X    X    X_ X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X X", 3);
+        test_back(b" X X     X   X X    X X X  X X X X X    X X  X X    X X   X   X X X   X    X  X  X    X    X   X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X ", 2);
+        test_back(b"   X    X   X X    X X X  X X X X X    X X  X X    X X   X   X X X   X    X  X  X    X    X    X X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X X", 2);
+        test_back(b" X X X    X   X X    X X X  X X X X X    X X  X X    X X   X   X X X   X    X  X  X    X    X  X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X X", 2);
+        test_back(b"       X   X X    X X X  X X X X X    X X  X X    X X   X   X X X   X    X  X  X    X    X    X_ X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X X", 2);
+        test_back(b" X X     X   X X    X X X  X X X X X    X X  X X    X X   X   X X X   X    X  X  X    X    X   X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X ", 3);
+        test_back(b"   X    X   X X    X X X  X X X X X    X X  X X    X X   X   X X X   X    X  X  X    X    X    X X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X X", 3);
+        test_back(b" X X X    X   X X    X X X  X X X X X    X X  X X    X X   X   X X X   X    X  X  X    X    X  X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X X", 3);
+        test_back(b"       X   X X    X X X  X X X X X    X X  X X    X X   X   X X X   X    X  X  X    X    X    X_ X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X X", 3);
     }
     #[test]
     fn prev_3() {
-        test_prev_3(" X X     X   X X    X X X  X X X X X    X X  X X    X X   X   X X X   X    X  X  X    X    X   X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X ");
-        test_prev_3("   X    X   X X    X X X  X X X X X    X X  X X    X X   X   X X X   X    X  X  X    X    X    X X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X X");
-        test_prev_3(" X X X    X   X X    X X X  X X X X X    X X  X X    X X   X   X X X   X    X  X  X    X    X  X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X X");
-        test_prev_3("       X   X X    X X X  X X X X X    X X  X X    X X   X   X X X   X    X  X  X    X    X    X_ X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X X");
+        test_prev_3(b" X X     X   X X    X X X  X X X X X    X X  X X    X X   X   X X X   X    X  X  X    X    X   X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X ");
+        test_prev_3(b"   X    X   X X    X X X  X X X X X    X X  X X    X X   X   X X X   X    X  X  X    X    X    X X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X X");
+        test_prev_3(b" X X X    X   X X    X X X  X X X X X    X X  X X    X X   X   X X X   X    X  X  X    X    X  X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X X");
+        test_prev_3(b"       X   X X    X X X  X X X X X    X X  X X    X X   X   X X X   X    X  X  X    X    X    X_ X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X X");
+    }
+    #[test]
+    fn starts() {
+        let input    = b"XXXX   X X  XXX X XXXXX XXXXXXXXX XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX XXXXXXXXXX          XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX XXXXX X";
+        let expected = b"X      X X  X   X X     X         X                                                                                         X                   X                                                                                                                                                                                                                              X     X";
+        let actual: Vec<u64> = scan_overflow(chunks64(input), |input, overflow| input.where_eq(b'X').starts(overflow)).collect();
+        let expected: Vec<u64> = chunks64(expected).map(|input| input.where_eq(b'X')).collect();
+        assert_eq!(actual, expected);
+        let input    = b"                                                                XXXX";
+        let expected = b"                                                                X   ";
+        let actual: Vec<u64> = scan_overflow(chunks64(input), |input, overflow| input.where_eq(b'X').starts(overflow)).collect();
+        let expected: Vec<u64> = chunks64(expected).map(|input| input.where_eq(b'X')).collect();
+        assert_eq!(actual, expected);
+    }
+    #[test]
+    fn after_series() {
+        let input    = b"X ";
+        let expected = b" X";
+        let actual: Vec<u64> = scan_overflow(chunks64(input), |input, overflow| input.where_eq(b'X').after_series(overflow)).collect();
+        let expected: Vec<u64> = chunks64(expected).map(|input| input.where_eq(b'X')).collect();
+        assert_eq!(actual, expected);
+        let input    = b"XXXX   X X  XXX X XXXXX XXXXXXXXX XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX XXXXXXXXXX          XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX XXXXX X";
+        let expected = b"    X   X X    X X     X         X                                                                                         X          X                                                                                                                                                                                                                                       X     X X";
+        let actual: Vec<u64> = scan_overflow(chunks64(input), |input, overflow| input.where_eq(b'X').after_series(overflow)).collect();
+        let expected: Vec<u64> = chunks64(expected).map(|input| input.where_eq(b'X')).collect();
+        assert_eq!(actual, expected);
+        let input    = b"                                                                XXXX";
+        let expected = b"                                                                    X";
+        let actual: Vec<u64> = scan_overflow(chunks64(input), |input, overflow| input.where_eq(b'X').after_series(overflow)).collect();
+        let expected: Vec<u64> = chunks64(expected).map(|input| input.where_eq(b'X')).collect();
+        assert_eq!(actual, expected);
     }
 }
