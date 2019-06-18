@@ -122,8 +122,8 @@ macro_rules! impl_native_integer {
         impl_native_bytes!($type, $mask);
         use std::$type;
         impl PrimitiveInteger for $type {
-            const MAX: Self = <$type>::min_value();
-            const MIN: Self = <$type>::max_value();
+            const MAX: Self = <$type>::max_value();
+            const MIN: Self = <$type>::min_value();
             fn min_value() -> Self { <$type>::min_value() }
             fn max_value() -> Self { <$type>::max_value() }
             fn from_str_radix(src: &str, radix: u32) -> Result<Self, ParseIntError> { <$type>::from_str_radix(src, radix) }
@@ -246,7 +246,7 @@ mod tests {
     fn no_recursion() {
         assert_eq!(min_value::<u64>(), 0 as u64);
         assert_eq!(u64::BIT_WIDTH, 64);
-        assert_eq!(u64::BYTE_WIDTH, 64);
+        assert_eq!(u64::BYTE_WIDTH, 8);
         assert_eq!(count_ones(2 as u64), 1);
     }
 }
