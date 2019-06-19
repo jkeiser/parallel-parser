@@ -33,15 +33,12 @@ pub struct ParseChunkOverflow {
     find_strings_overflow: FindStringsOverflow,
 }
 
-pub fn parse_chunk(input: &[u8;512], overflow: ParseChunkOverflow) -> (ParsedChunk, ParseChunkOverflow) {
-    let (ValidateUtf8 { invalid_utf8 }, validate_utf8_overflow) = validate_utf8(input, overflow.validate_utf8_overflow);
-    let (FindEscapes { backslashes, escaped }, find_escapes_overflow) = find_escapes(input, overflow.find_escapes_overflow);
-    let (FindStrings { strings, invalid_string_bytes }, find_strings_overflow) = find_strings(input, escaped, overflow.find_strings_overflow);
+pub fn parse_chunk(input: &[u8;512], overflow: &mut ParseChunkOverflow) -> ParsedChunk {
+    let ValidateUtf8 { invalid_utf8 } = validate_utf8(input, &mut overflow.validate_utf8_overflow);
+    let FindEscapes { backslashes, escaped } = find_escapes(input, &mut overflow.find_escapes_overflow);
+    let FindStrings { strings, invalid_string_bytes } = find_strings(input, escaped, &mut overflow.find_strings_overflow);
 
-    (
-        ParsedChunk { backslashes, escaped, strings, invalid_utf8, invalid_string_bytes },
-        ParseChunkOverflow { validate_utf8_overflow, find_escapes_overflow, find_strings_overflow }
-    )
+    ParsedChunk { backslashes, escaped, strings, invalid_utf8, invalid_string_bytes }
 }
 
 
@@ -57,14 +54,14 @@ pub struct FindEscapesOverflow {
     // last_4_unicode_hex_starts: u64,
 }
 
-pub fn find_escapes(input: &[u8;512], overflow: FindEscapesOverflow) -> (FindEscapes, FindEscapesOverflow) {
+pub fn find_escapes(input: &[u8;512], overflow: &mut FindEscapesOverflow) -> FindEscapes {
     let backslashes = each_64(input, |i| i.where_eq(b'\\'));
-    let (escaped, after_odd_series_overflow) = backslashes.after_odd_series(overflow.after_odd_series_overflow);
+    let escaped = backslashes.after_odd_series_end(&mut overflow.after_odd_series_overflow);
     // Mark off the 4 hexes after \u as being escaped
     // let unicode_hex_starts = input.where_eq(b'u') & escaped;
     // let (last_4_unicode_hex_starts, last_4_unicode_hex_starts_overflow) = input.prev_range(1..4, overflow.last_4_unicode_hex_starts);
     // escaped |= last_4_unicode_hex_starts;
-    (FindEscapes { backslashes, escaped }, FindEscapesOverflow { after_odd_series_overflow })
+    FindEscapes { backslashes, escaped }
 }
 
 
@@ -79,14 +76,14 @@ pub struct FindStringsOverflow {
     strings_overflow: u64
 }
 
-pub fn find_strings(input: &[u8;512], escaped: u64x8, overflow: FindStringsOverflow) -> (FindStrings, FindStringsOverflow) {
+pub fn find_strings(input: &[u8;512], escaped: u64x8, overflow: &mut FindStringsOverflow) -> FindStrings {
     let quotes = each_64(input, |i| i.where_eq(b'"')) & !escaped;
-    let (strings, strings_overflow) = quotes.between_pairs(overflow.strings_overflow);
+    let strings = quotes.between_pairs(&mut overflow.strings_overflow);
     // 00-1F are invalid characters within a string.
     let mut invalid_string_bytes = each_64(input, |i| i.where_lt(0x20)) & strings;
     // escape characters are invalid outside a string.
     invalid_string_bytes |= !strings & escaped;
-    (FindStrings { strings, invalid_string_bytes }, FindStringsOverflow { strings_overflow })
+    FindStrings { strings, invalid_string_bytes }
 }
 
 #[derive(Clone,Debug,Default)]
@@ -110,11 +107,12 @@ pub struct ValidateUtf8Overflow {
 /// Invalid UTF-8 multibyte sequences will not have *all* bytes in the sequence invalidated, but in
 /// all cases at least *one* of them will be.
 /// 
-pub fn validate_utf8(input: &[u8;512], overflow: ValidateUtf8Overflow) -> (ValidateUtf8, ValidateUtf8Overflow) {
+pub fn validate_utf8(input: &[u8;512], overflow: &mut ValidateUtf8Overflow) -> ValidateUtf8 {
     let first_bit = each_64(input, |i| i.where_ge(0b1000000));
     // ASCII only is so common we skip validation when it's off.
     if !first_bit.any() {
-        return (Default::default(), Default::default());
+        *overflow = Default::default();
+        return Default::default();
     }
 
     // Valid Bytes
@@ -147,18 +145,18 @@ pub fn validate_utf8(input: &[u8;512], overflow: ValidateUtf8Overflow) -> (Valid
     let third_bit   = each_64(input, |i| i.where_bits_set(0b00100000));
     let fourth_bit  = each_64(input, |i| i.where_bits_set(0b00010000));
     let continuation        = first_bit & !second_bit;
-    let (after_second_bit, after_second_bit_overflow) = second_bit.prev(overflow.after_second_bit_overflow);
-    let (after_third_bit, after_third_bit_overflow) = third_bit.back(2, overflow.after_third_bit_overflow);
-    let (after_fourth_bit, after_fourth_bit_overflow) = fourth_bit.back(3, overflow.after_fourth_bit_overflow);
+    let after_second_bit = second_bit.prev(&mut overflow.after_second_bit_overflow);
+    let after_third_bit = third_bit.back(2, &mut overflow.after_third_bit_overflow);
+    let after_fourth_bit = fourth_bit.back(3, &mut overflow.after_fourth_bit_overflow);
     invalid_utf8 |= continuation ^ !(after_second_bit | after_third_bit | after_fourth_bit);
 
     // Overlong UTF-8 encodings (http://www.unicode.org/versions/corrigendum1.html): 1001xxxx, 1010xxxx, 1011xxxx
     // - E0 followed by 80-9F (00-9F,C0-FF really) = 11100000 followed by x < 10100000 or x >= 11000000. MUST start with 101.                            invalidate xx1xxxxx or < A0.
     // - F0 followed by 80-8F (00-8F,C0-FF really) = 11110000 followed by x < 10010000 or x >= 11000000. MUST NOT start with 1000 (1001, 1010, 1011 ok.) invalidate xx00xxxx or < 90.
     // - F4 followed by 90-BF (00-7F,90-FF really) = 11110100 followed by x < 10000000 or x >= 10010000. MUST start with 1000.                           invalidate xx1xxxxx or xxx1xxxx or >= 90.
-    let (preceded_by_e0, preceded_by_e0_overflow) = each_64(input, |i| i.where_eq(0xE0)).prev(overflow.preceded_by_e0_overflow);
-    let (preceded_by_f0, preceded_by_f0_overflow) = each_64(input, |i| i.where_eq(0xF0)).prev(overflow.preceded_by_f0_overflow);
-    let (preceded_by_f4, preceded_by_f4_overflow) = each_64(input, |i| i.where_eq(0xF4)).prev(overflow.preceded_by_f4_overflow);
+    let preceded_by_e0 = each_64(input, |i| i.where_eq(0xE0)).prev(&mut overflow.preceded_by_e0_overflow);
+    let preceded_by_f0 = each_64(input, |i| i.where_eq(0xF0)).prev(&mut overflow.preceded_by_f0_overflow);
+    let preceded_by_f4 = each_64(input, |i| i.where_eq(0xF4)).prev(&mut overflow.preceded_by_f4_overflow);
     // At this point, we're ONLY deciding whether valid continuation bytes form overlong sequences, so we know all these bytes start with 10xxxxxx.
     let ge_a0 = third_bit; // To be >= A0 (10100000), it has to start with 10 AND have its third bit set.
     invalid_utf8 |= preceded_by_e0 & !ge_a0; // & each_64(input, |i| i.where_lt(0xA0));
@@ -166,7 +164,7 @@ pub fn validate_utf8(input: &[u8;512], overflow: ValidateUtf8Overflow) -> (Valid
     invalid_utf8 |= preceded_by_f0 & !ge_90; // each_64(input, |i| i.where_lt(0x90));
     invalid_utf8 |= preceded_by_f4 & ge_90;
 
-    (ValidateUtf8 { invalid_utf8 }, ValidateUtf8Overflow { after_second_bit_overflow, after_third_bit_overflow, after_fourth_bit_overflow, preceded_by_e0_overflow, preceded_by_f0_overflow, preceded_by_f4_overflow })
+    ValidateUtf8 { invalid_utf8 }
 
     // In all, in thie procedure we check:
     // bits set: 1, 1, 1, 1
@@ -402,14 +400,15 @@ mod tests {
             input[0..64].copy_from_slice(input64);
             println!("{:30}: {:64}", "input", String::from_utf8_lossy(&input[0..64]));
             println!("{:30}: {}", "first_character_is_escaped", first_character_is_escaped);
-            let (result, next) = find_escapes(&input, FindEscapesOverflow { after_odd_series_overflow: AfterOddSeriesOverflow { start_overflow: next_character_is_escaped as u64, even_overflow: false, odd_overflow: next_character_is_escaped } });
+            let mut overflow = FindEscapesOverflow { after_odd_series_overflow: AfterOddSeriesOverflow { start_overflow: next_character_is_escaped as u64, even_overflow: false, odd_overflow: next_character_is_escaped } };
+            let result = find_escapes(&input, &mut overflow);
             let escape_mask = result.backslashes.extract(0) | result.escaped.extract(0);
             println!("{:30}: {:064b}", "escape_mask", escape_mask.reverse_bits());
             println!("{:30}: {:064b}", "escape_mask?", escape_mask_reversed);
             assert_eq!(escape_mask_reversed.reverse_bits(), escape_mask);
-            println!("{:30}: {}", "next_character_is_escaped", next.after_odd_series_overflow.odd_overflow);
+            println!("{:30}: {}", "next_character_is_escaped", overflow.after_odd_series_overflow.odd_overflow);
             println!("{:30}: {}", "next_character_is_escaped?", next_character_is_escaped);
-            assert_eq!(next_character_is_escaped, next.after_odd_series_overflow.odd_overflow);
+            assert_eq!(next_character_is_escaped, overflow.after_odd_series_overflow.odd_overflow);
         }
 
         #[test]
