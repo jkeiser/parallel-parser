@@ -589,131 +589,107 @@ mod tests {
                 invalid_string_bytes: vec![],
             })
         }
-        // #[test]
-        // fn almost_all_backslashes() {
-        //     escape_test(
-        //         br"\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\ ", false,
-        //         br"XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX", false
-        //     )
-        // }
-        // #[test]
-        // fn almost_all_backslashes_first_backslashed() {
-        //     escape_test(
-        //         br"\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\ ", true,
-        //         br"XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX ", false
-        //     )
-        // }
-        // #[test]
-        // fn almost_all_backslashes_alternate() {
-        //     escape_test(
-        //         br" \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\", false,
-        //         br" XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX", true
-        //     )
-        // }
-        // #[test]
-        // fn almost_all_backslashes_alternate_first_backslashed() {
-        //     escape_test(
-        //         br" \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\", true,
-        //         br"XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX", true
-        //     )
-        // }
-        // #[test]
-        // fn many_different_backslashes() {
-        //     escape_test(
-        //         br"\ \\ \\\ \\\\ \\\\\ \\\\\\ \\\\\\\ \\\\\\\\ \\\\\\\\\ \\\\\\\\\\", false,
-        //         br"XXXX XXXXXXXX XXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXXXXXX", false
-        //     )
-        // }
-        // #[test]
-        // fn many_different_backslashes_first_backslashed() {
-        //     escape_test(
-        //         br"\ \\ \\\ \\\\ \\\\\ \\\\\\ \\\\\\\ \\\\\\\\ \\\\\\\\\ \\\\\\\\\\", true,
-        //         br"X XX XXXXXXXX XXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXXXXXX", false
-        //     )
-        // }
-        // #[test]
-        // fn every_other_backslash() {
-        //     escape_test(
-        //         br"\ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ ", false,
-        //         br"XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX", false
-        //     )
-        // }
-        // #[test]
-        // fn every_other_backslash_first_backslashed() {
-        //     escape_test(
-        //         br"\ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ ", true,
-        //         br"X XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX", false
-        //     )
-        // }
-        // #[test]
-        // fn every_other_backslash_alternate() {
-        //     escape_test(
-        //         br" \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \", false,
-        //         br" XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX", true
-        //     )
-        // }
-        // #[test]
-        // fn every_other_backslash_alternate_first_backslashed() {
-        //     escape_test(
-        //         br" \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \", true,
-        //         br"XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX", true
-        //     )
-        // }
-        // #[test]
-        // fn every_other_2_backslash() {
-        //     escape_test(
-        //         br"\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \", false,
-        //         br"XX XX XX XX XX XX XX XX XX XX XX XX XX XX XX XX XX XX XX XX XX X", true
-        //     )
-        // }
-        // #[test]
-        // fn every_other_2_backslash_alternate() {
-        //     escape_test(
-        //         br" \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ ", false,
-        //         br" XX XX XX XX XX XX XX XX XX XX XX XX XX XX XX XX XX XX XX XX XX ", false
-        //     )
-        // }
-        // #[test]
-        // fn every_other_2_backslash_alternate2() {
-        //     escape_test(
-        //         br"  \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\", false,
-        //         br"  XX XX XX XX XX XX XX XX XX XX XX XX XX XX XX XX XX XX XX XX XX", false
-        //     )
-        // }
-        // #[test]
-        // fn every_other_3_backslash() {
-        //     escape_test(
-        //         br"\\\ \\\ \\\ \\\ \\\ \\\ \\\ \\\ \\\ \\\ \\\ \\\ \\\ \\\ \\\ \\\ ", false,
-        //         br"XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX", false
-        //     )
-        // }
-        // #[test]
-        // fn every_other_3_backslash_first_backslashed() {
-        //     escape_test(
-        //         br"\\\ \\\ \\\ \\\ \\\ \\\ \\\ \\\ \\\ \\\ \\\ \\\ \\\ \\\ \\\ \\\ ", true,
-        //         br"XXX XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX", false
-        //     )
-        // }
-        // #[test]
-        // fn every_other_3_backslash_alternate() {
-        //     escape_test(
-        //         br" \\\ \\\ \\\ \\\ \\\ \\\ \\\ \\\ \\\ \\\ \\\ \\\ \\\ \\\ \\\ \\\", false,
-        //         br" XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX", true
-        //     )
-        // }
-        // #[test]
-        // fn every_other_3_backslash_alternate2() {
-        //     escape_test(
-        //         br"\ \\\ \\\ \\\ \\\ \\\ \\\ \\\ \\\ \\\ \\\ \\\ \\\ \\\ \\\ \\\ \\", false,
-        //         br"XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX", false
-        //     )
-        // }
-        // #[test]
-        // fn every_other_3_backslash_alternate3() {
-        //     escape_test(
-        //         br"\\ \\\ \\\ \\\ \\\ \\\ \\\ \\\ \\\ \\\ \\\ \\\ \\\ \\\ \\\ \\\ \", false,
-        //         br"XX XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX", true
-        //     )
-        // }
+        #[test]
+        fn almost_all_backslashes_alternate() {
+            With {
+                input:       vec![chunk(br#"""#,br#""#),tail(br#"\"#.repeat(511))] }.expect(FindStrings {
+                backslashes: vec![chunk(br#" "#,br#""#),tail(br#"X"#.repeat(511))],
+                escaped:     vec![chunk(br#" "#,br#""#),head(br#""#),               head(br#"X"#)],
+                strings:     vec![  all(br#"X"#),        all(br#"X"#),               all(br#"X"#)],
+                invalid_string_bytes: vec![],
+            })
+        }
+        #[test]
+        fn almost_all_backslashes_alternate_first_backslashed() {
+            With {
+                input:       vec![chunk(br#"""#,br#"\"#),tail(br#"\"#.repeat(511))] }.expect(FindStrings {
+                backslashes: vec![chunk(br#" "#,br#"X"#),tail(br#"X"#.repeat(511))],
+                escaped:     vec![chunk(br#" "#,br#" "#),head(br#"X"#),              head(br#"X"#)],
+                strings:     vec![  all(br#"X"#),         all(br#"X"#),               all(br#"X"#)],
+                invalid_string_bytes: vec![],
+            })
+        }
+        #[test]
+        fn many_different_backslashes() {
+            With {
+                input:       vec![chunk(br#"""#,br#"\"#),head(br#"\ \\ \\\ \\\\ \\\\\ \\\\\\ \\\\\\\ \\\\\\\\ \\\\\\\\\ \\\\\\\\\\"#.repeat(1))] }.expect(FindStrings {
+                backslashes: vec![chunk(br#" "#,br#"X"#),head(br#"X XX XXX XXXX XXXXX XXXXXX XXXXXXX XXXXXXXX XXXXXXXXX XXXXXXXXXX"#.repeat(1))],
+                escaped:     vec![chunk(br#" "#,br#" "#),head(br#"        X          X              X                  X"#.repeat(1))],
+                strings:     vec![  all(br#"X"#),         all(br#"X"#)],
+                invalid_string_bytes: vec![],
+            })
+        }
+        #[test]
+        fn many_different_backslashes_first_backslashed() {
+            With {
+                input:       vec![chunk(br#"""#,br#""#),head(br#"\ \\ \\\ \\\\ \\\\\ \\\\\\ \\\\\\\ \\\\\\\\ \\\\\\\\\ \\\\\\\\\\"#.repeat(1))] }.expect(FindStrings {
+                backslashes: vec![chunk(br#" "#,br#""#),head(br#"X XX XXX XXXX XXXXX XXXXXX XXXXXXX XXXXXXXX XXXXXXXXX XXXXXXXXXX"#.repeat(1))],
+                escaped:     vec![chunk(br#" "#,br#""#),head(br#" X      X          X              X                  X"#.repeat(1))],
+                strings:     vec![  all(br#"X"#),         all(br#"X"#)],
+                invalid_string_bytes: vec![],
+            })
+        }
+
+        #[test]
+        fn every_other_backslash() {
+            With {
+                input:       vec![chunk(br#"""#,br#""#),  all(br#"\ "#)] }.expect(FindStrings {
+                backslashes: vec![chunk(br#" "#,br#""#),  all(br#"X "#)],
+                escaped:     vec![chunk(br#" "#,br#""#),  all(br#" X"#)],
+                strings:     vec![  all(br#"X"#),         all(br#"X"#)],
+                invalid_string_bytes: vec![],
+            })
+        }
+        #[test]
+        fn every_other_backslash_first_backslashed() {
+            With {
+                input:       vec![chunk(br#"""#,br#"\"#),  all(br#"\ "#)] }.expect(FindStrings {
+                backslashes: vec![chunk(br#" "#,br#"X"#),  all(br#"X "#)],
+                escaped:     vec![chunk(br#" "#,br#" "#), tail(br#" X"#.repeat(512/2-1))],
+                strings:     vec![  all(br#"X"#),          all(br#"X"#)],
+                invalid_string_bytes: vec![],
+            })
+        }
+
+        #[test]
+        fn every_other_backslash_alternate() {
+            With {
+                input:       vec![chunk(br#"""#,br#""#),  all(br#" \"#)] }.expect(FindStrings {
+                backslashes: vec![chunk(br#" "#,br#""#),  all(br#" X"#)],
+                escaped:     vec![chunk(br#" "#,br#""#), tail(br#"X "#.repeat(512/2-1)), head(br#"X"#)],
+                strings:     vec![  all(br#"X"#),         all(br#"X"#), all(br#"X"#)],
+                invalid_string_bytes: vec![],
+            })
+        }
+        #[test]
+        fn every_other_backslash_alternate_first_backslashed() {
+            With {
+                input:       vec![chunk(br#"""#,br#"\"#),  all(br#" \"#)] }.expect(FindStrings {
+                backslashes: vec![chunk(br#" "#,br#"X"#),  all(br#" X"#)],
+                escaped:     vec![chunk(br#" "#,br#" "#),  all(br#"X "#), head(br#"X"#)],
+                strings:     vec![  all(br#"X"#),          all(br#"X"#), all(br#"X"#)],
+                invalid_string_bytes: vec![],
+            })
+        }
+        #[test]
+        fn every_other_2_backslash() {
+            With {
+                input:       vec![chunk(br#"""#,br#""#),  head(br#"\\ "#.repeat(512/3))] }.expect(FindStrings {
+                backslashes: vec![chunk(br#" "#,br#""#),  head(br#"XX "#.repeat(512/3))],
+                escaped:     vec![chunk(br#" "#,br#""#),  head(br#"   "#)],
+                strings:     vec![  all(br#"X"#),         all(br#"X"#)],
+                invalid_string_bytes: vec![],
+            })
+        }
+        #[test]
+        fn every_other_2_backslash_first_backslashed() {
+            With {
+                input:       vec![chunk(br#"""#,br#"\"#),  head(br#"\\ "#.repeat(512/3))] }.expect(FindStrings {
+                backslashes: vec![chunk(br#" "#,br#"X"#),  head(br#"XX "#.repeat(512/3))],
+                escaped:     vec![chunk(br#" "#,br#" "#),  head(br#"  X"#)],
+                strings:     vec![  all(br#"X"#),         all(br#"X"#)],
+                invalid_string_bytes: vec![],
+            })
+        }
     }
 }
