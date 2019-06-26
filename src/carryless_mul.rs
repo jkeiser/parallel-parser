@@ -14,7 +14,8 @@ impl CarrylessMul<u64> for u64 {
     type Output = u64x2;
     fn clmul(self, other: u64) -> Self::Output {
         let a: __m128i = unsafe { mem::transmute(u64x2::new(self, 0)) };
-        let b: __m128i = unsafe { mem::transmute(u64x2::splat(other)) };
-        unsafe { mem::transmute(_mm_clmulepi64_si128(a, b, 0)) }
+        let b: __m128i = unsafe { mem::transmute(u64x2::new(other, 0)) };
+        let result = unsafe { _mm_clmulepi64_si128(a, b, 0) };
+        unsafe { mem::transmute(result) }
     }
 }

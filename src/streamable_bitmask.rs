@@ -16,12 +16,10 @@ pub trait StreamableBitmask: Sized
     const ODD_BITS: Self;
     const TOP_BIT: Self;
 
-    type Overflow: StreamableBitmask+From<bool>;
-
-    fn streaming_shift_forward(self, count: u32, overflow: &mut Self::Overflow, overflow_count: u32) -> Self;
+    fn streaming_shift_forward(self, count: u32, overflow: &mut u8, overflow_count: u32) -> Self;
     fn streaming_add(self, other: Self, overflow: &mut bool) -> Self;
-    fn streaming_clmul(self, other: Self::Overflow, overflow: &mut Self::Overflow) -> Self;
-    fn from_overflow(overflow: Self::Overflow) -> Self;
+    // fn streaming_clmul(self, other: u64, overflow: &mut u64) -> Self;
+    fn from_overflow(overflow: u8) -> Self;
     fn from_bool_overflow(overflow: bool) -> Self;
 
     ///
@@ -31,7 +29,7 @@ pub trait StreamableBitmask: Sized
     /// 
     /// e.g. prev(01111010) = 00111101...
     /// 
-    fn prev(self, overflow: &mut Self::Overflow) -> Self {
+    fn prev(self, overflow: &mut u8) -> Self {
         self.streaming_shift_forward(1, overflow, 1)
     }
 
@@ -42,7 +40,7 @@ pub trait StreamableBitmask: Sized
     /// 
     /// e.g. prev(01111010) = 00111101...
     /// 
-    fn back(self, count: u32, overflow: &mut Self::Overflow) -> Self {
+    fn back(self, count: u32, overflow: &mut u8) -> Self {
         self.streaming_shift_forward(count, overflow, count)
     }
 
@@ -53,7 +51,7 @@ pub trait StreamableBitmask: Sized
     /// 
     /// e.g. back(01111010, 3) = 00001111...
     ///
-    fn prev_2(self, overflow: &mut Self::Overflow) -> (Self, Self) {
+    fn prev_2(self, overflow: &mut u8) -> (Self, Self) {
         let mut ignore_overflow = *overflow;
         let prev1 = self.streaming_shift_forward(1, &mut ignore_overflow, 2);
         let prev2 = self.streaming_shift_forward(2, overflow, 2);
@@ -67,7 +65,7 @@ pub trait StreamableBitmask: Sized
     /// 
     /// e.g. back(01111010, 3) = 00001111...
     ///
-    fn prev_3(self, overflow: &mut Self::Overflow) -> (Self, Self, Self) {
+    fn prev_3(self, overflow: &mut u8) -> (Self, Self, Self) {
         let mut ignore_overflow = *overflow;
         let prev1 = self.streaming_shift_forward(1, &mut ignore_overflow, 3);
         let mut ignore_overflow = *overflow;
@@ -91,11 +89,11 @@ pub trait StreamableBitmask: Sized
     fn all(self) -> bool;
     
     ///
-    /// The is_series_start of any series of 1's: flips on the bit *at* the beginning of a run of 1's.
+    /// The series_start of any series of 1's: flips on the bit *at* the beginning of a run of 1's.
     ///
-    /// e.g. is_series_start(01111010) = 01000010
+    /// e.g. series_start(01111010) = 01000010
     /// 
-    fn is_series_start(self, overflow: &mut Self::Overflow) -> Self {
+    fn series_start(self, overflow: &mut u8) -> Self {
         let prev = self.prev(overflow);
         self & !prev
     }
@@ -105,7 +103,7 @@ pub trait StreamableBitmask: Sized
     ///
     /// e.g. after_series_end(01111010) = 00000101
     /// 
-    fn after_series_end(self, overflow: &mut Self::Overflow) -> Self {
+    fn after_series_end(self, overflow: &mut u8) -> Self {
         let prev = self.prev(overflow);
         !self & prev
     }
@@ -117,9 +115,12 @@ pub trait StreamableBitmask: Sized
     /// 
     /// Find identifiers from alpha and num:
     /// 
-    ///     let alpha = bytes.where_within(b'A'..=b'Z') | bytes.where_within(b'a'..=b'z') | bytes.where_eq(b'_');
-    ///     let digit = bytes.where_within(b'0'..=b'9');
-    ///     digit.after_series_starting_with(alpha, overflow)
+    /// ```ignore
+    /// let alpha = bytes.where_within(b'A'..=b'Z') | bytes.where_within(b'a'..=b'z') | bytes.where_eq(b'_');
+    /// let digit = bytes.where_within(b'0'..=b'9');
+    /// let overflow = false;
+    /// digit.after_series_starting_with(alpha, &mut overflow)
+    /// ```
     ///
     fn after_series_starting_with(self, primary: Self, overflow: &mut bool) -> Self {
         let added = primary.streaming_add(self | primary, overflow);
@@ -133,6 +134,7 @@ pub trait StreamableBitmask: Sized
     /// 
     /// e.g. after_odd_series(01111010) = 00000001
     /// 
+    /// ```ignore
     ///             01111010
     /// even_starts 00000010
     ///           + 01111010
@@ -145,20 +147,23 @@ pub trait StreamableBitmask: Sized
     ///           | 01010011
     ///         & ! 01111010
     ///           = 00000001
+    /// ```
     /// 
     /// ## Examples
     /// 
     /// Find non-backslashes that are after an *odd* sequence of backslashes:
+    ///
+    /// ```ignore 
+    /// let backslash = bytes.where_eq(rb'\');
+    /// backslash.after_odd_series(overflow)
+    /// ```
     /// 
-    ///     let backslash = bytes.where_eq(rb'\');
-    ///     backslash.after_odd_series(overflow)
-    /// 
-    fn after_odd_series_end(self, overflow: &mut AfterOddSeriesOverflow<Self::Overflow>) -> Self {
+    fn after_odd_series_end(self, overflow: &mut AfterOddSeriesOverflow) -> Self {
         // NOTE: the overflow could be done more efficiently with an Option<bool> where None indicates no overflow, false indicates even overflow and true indicates odd overflow.
         // It could be done even MORE efficiently with a single bool ("was there odd overflow") as long as we're willing to sometimes mark the middle of the series as "the end of an odd run." (Could mask it back off, too.)
-        let is_series_start = self.is_series_start(&mut overflow.start_overflow);
-        let even_ends = (is_series_start & Self::EVEN_BITS).streaming_add(self, &mut overflow.even_overflow);
-        let odd_ends = (is_series_start & Self::ODD_BITS).streaming_add(self, &mut overflow.odd_overflow);
+        let series_start = self.series_start(&mut overflow.start_overflow);
+        let even_ends = (series_start & Self::EVEN_BITS).streaming_add(self, &mut overflow.even_overflow);
+        let odd_ends = (series_start & Self::ODD_BITS).streaming_add(self, &mut overflow.odd_overflow);
         let after_odd_series = (even_ends & Self::ODD_BITS) | (odd_ends & Self::EVEN_BITS);
         after_odd_series & !self
     }
@@ -170,6 +175,7 @@ pub trait StreamableBitmask: Sized
     /// 
     /// e.g. after_odd_series(01111010) = 01111011
     /// 
+    /// ```ignore
     ///             01111010
     /// even_starts 00000010
     ///           + 01111010
@@ -182,20 +188,23 @@ pub trait StreamableBitmask: Sized
     ///           | 01010011
     ///           | 01111010
     ///           = 01111011
+    /// ```
     /// 
     /// ## Examples
     /// 
     /// Find non-backslashes that are after an *odd* sequence of backslashes:
     /// 
-    ///     let backslash = bytes.where_eq(rb'\');
-    ///     backslash.after_odd_series(overflow)
+    /// ```ignore
+    /// let backslash = bytes.where_eq(rb'\');
+    /// backslash.after_odd_series(overflow)
+    /// ```
     /// 
-    fn complete_even_series(self, overflow: &mut AfterOddSeriesOverflow<Self::Overflow>) -> Self {
+    fn complete_even_series(self, overflow: &mut AfterOddSeriesOverflow) -> Self {
         // NOTE: the overflow could be done more efficiently with an Option<bool> where None indicates no overflow, false indicates even overflow and true indicates odd overflow.
         // It could be done even MORE efficiently with a single bool ("was there odd overflow") as long as we're willing to sometimes mark the middle of the series as "the end of an odd run." (Could mask it back off, too.)
-        let is_series_start = self.is_series_start(&mut overflow.start_overflow);
-        let even_ends = (is_series_start & Self::EVEN_BITS).streaming_add(self, &mut overflow.even_overflow);
-        let odd_ends = (is_series_start & Self::ODD_BITS).streaming_add(self, &mut overflow.odd_overflow);
+        let series_start = self.series_start(&mut overflow.start_overflow);
+        let even_ends = (series_start & Self::EVEN_BITS).streaming_add(self, &mut overflow.even_overflow);
+        let odd_ends = (series_start & Self::ODD_BITS).streaming_add(self, &mut overflow.odd_overflow);
         let after_odd_series = (even_ends & Self::ODD_BITS) | (odd_ends & Self::EVEN_BITS);
         after_odd_series
     }
@@ -207,10 +216,7 @@ pub trait StreamableBitmask: Sized
     /// 
     /// e.g. between_pairs(0100100110) = (0111000100)
     /// 
-    fn between_pairs(self, overflow: &mut Self::Overflow) -> Self {
-        let zero: Self::Overflow = false.into();
-        self.streaming_clmul(!zero, overflow)
-    }
+    fn between_pairs(self, overflow: &mut bool) -> Self;
 
     ///
     /// Get the value of a single bit.
@@ -223,8 +229,8 @@ pub fn each_bit<'a, T: StreamableBitmask+'a>(mask: T) -> impl Iterator<Item=bool
 }
 
 #[derive(Copy,Clone,Debug,Default)]
-pub struct AfterOddSeriesOverflow<I> {
-    pub(crate) start_overflow: I,
+pub struct AfterOddSeriesOverflow {
+    pub(crate) start_overflow: u8,
     pub(crate) odd_overflow: bool,
     pub(crate) even_overflow: bool
 }
@@ -236,11 +242,10 @@ impl StreamableBitmask for u64x8 {
     const EVEN_BITS: Self = Self::splat(u64::EVEN_BITS);
     const ODD_BITS: Self = Self::splat(u64::ODD_BITS);
     const TOP_BIT: Self = u64x8::new(u64::TOP_BIT, 0, 0, 0, 0, 0, 0, 0);
-    type Overflow = u64;
 
-    fn streaming_shift_forward(self, count: u32, overflow: &mut Self::Overflow, overflow_count: u32) -> Self {
+    fn streaming_shift_forward(self, count: u32, overflow: &mut u8, overflow_count: u32) -> Self {
         assert!(count < u64x8::lanes() as u32*64);
-        assert!(overflow_count <= 64);
+        assert!(overflow_count <= 8);
         assert!(count <= overflow_count);
         let prev_overflow = *overflow >> (overflow_count-count);
 
@@ -254,23 +259,23 @@ impl StreamableBitmask for u64x8 {
 
         // First, shift the bits that will stay in their current spot
         //  1111111111111100_2222222222222200_3333333333333300_4444444444444400_5555555555555500_6666666666666600_7777777777777700_8888888888888800
-        let shifted_in_place = self >> count;
+        let shifted_in_place = self << count;
         // Next, shift the bits that will carry WAAAAY over to the right, which is where they will end up in the next word.
         //  0000000000000002_0000000000000003_0000000000000004_0000000000000005_0000000000000006_0000000000000007_8000000000000008_0000000000000001
-        let  carried = self << (64 - count);
+        let  carried = self >> (64 - count);
         // Grab the overflow and replace it with the new carry
-        *overflow = carried.extract(0);
-        let carried = carried.replace(0, prev_overflow);
+        *overflow = carried.extract(7) as u8;
+        let carried = carried.replace(7, prev_overflow as u64);
         // (we're actually moving the words to the left here, because >> means "make
         // each bit less significant," and little-endian has the least significant stuff on the left.)
-        let carried = shuffle!(carried, [1,2,3,4,5,6,7,0]);
+        let carried = shuffle!(carried, [7,0,1,2,3,4,5,6]);
         shifted_in_place | carried
     }
     fn streaming_add(self, other: Self, overflow: &mut bool) -> Self {
         // Instructions: 3 (+ > select)
         let half_add = self + other;
         // Collect bits that actually carried, and put them into an 8 byte mask, with 1 in each byte that carried.
-        let carries = self.gt(half_add).bitmask() | *overflow as u8;
+        let carries = self.gt(half_add).bitmask();
 
         // Carry the 1s
         // NOTE: when 64 1's is uncommon, this is a lot of extra instructions. When it's not, it's
@@ -279,7 +284,7 @@ impl StreamableBitmask for u64x8 {
             // Collect the "carrythrough mask"--i.e. any lane with FFFFFFFF_FFFFFFFF becomes FF, and anything else becomes 00.
             let carrythroughs = half_add.eq(Self::ALL_BITS).bitmask();
             // Add the carry bits to the FF's, which makes them travel *through*, landing on the first non-FF.
-            let (carried, carried_overflow) = carrythroughs.overflowing_add(carries << 1);
+            let (carried, carried_overflow) = carrythroughs.overflowing_add((carries << 1) | (*overflow as u8));
             *overflow = carries & 0x80 > 0 || carried_overflow;
             // Any bits that *change* need to be carried (either FF's that get flipped due to
             // carrythrough, or non-FF's that have a carry bit on them), thus we xor with the original.
@@ -292,19 +297,18 @@ impl StreamableBitmask for u64x8 {
         // Add the carries to the result (lane-wise) and return
         half_add + carry_add
     }
-    fn streaming_clmul(self, other: Self::Overflow, overflow: &mut Self::Overflow) -> Self {
+    fn between_pairs(self, overflow: &mut bool) -> Self {
         let mut result = u64x8::splat(0);
         for i in 0..8 {
-            let cmul = result.extract(i).streaming_clmul(other, overflow);
-            result = result.replace(i, cmul);
+            result = result.replace(i, self.extract(i).between_pairs(overflow));
         }
         result
     }
-    fn from_overflow(overflow: Self::Overflow) -> Self {
-        Self::NO_BITS.replace(64-1, overflow)
+    fn from_overflow(overflow: u8) -> Self {
+        Self::NO_BITS.replace(64-1, overflow as u64)
     }
     fn from_bool_overflow(overflow: bool) -> Self {
-        Self::from_overflow(Self::Overflow::from_bool_overflow(overflow))
+        Self::NO_BITS.replace(64-1, overflow as u64)
     }
     fn all(self) -> bool {
         self == Self::ALL_BITS
@@ -321,31 +325,29 @@ impl StreamableBitmask for u64 {
     const NUM_BITS: u32 = 64;
     const NO_BITS: Self = 0;
     const ALL_BITS: Self = !Self::NO_BITS;
-    const EVEN_BITS: Self = Self::ODD_BITS << 1;
-    const ODD_BITS: Self = Self::ALL_BITS / 3; // odd + even = all. even = odd * 2. Therefore, odd * 3 = all, and all/3 = odd.
+    const EVEN_BITS: Self = 0x5555555555555555;
+    const ODD_BITS: Self = Self::EVEN_BITS << 1;
     const TOP_BIT: Self = 1 << (64 - 1);
 
-    type Overflow = Self;
-
-    fn streaming_shift_forward(self, count: u32, overflow: &mut Self::Overflow, overflow_count: u32) -> Self {
-        assert!(overflow_count <= 64);
+    fn streaming_shift_forward(self, count: u32, overflow: &mut u8, overflow_count: u32) -> Self {
+        assert!(overflow_count <= 8);
         assert!(count <= overflow_count);
         let prev_overflow = *overflow >> (overflow_count-count);
-        *overflow = self >> (64-count);
-        (self << count) | prev_overflow
+        *overflow = (self >> (64-count)) as u8;
+        (self << count) | prev_overflow as u64
     }
     fn streaming_add(self, other: Self, overflow: &mut bool) -> Self {
         let (result, new_overflow) = self.overflowing_add(other + Self::from(*overflow));
         *overflow = new_overflow;
         result
     }
-    fn streaming_clmul(self, other: Self::Overflow, overflow: &mut Self::Overflow) -> Self {
-        let result = self.clmul(other) ^ *overflow;
-        *overflow = result.extract(1);
-        result.extract(0)
+    fn between_pairs(self, overflow: &mut bool) -> Self {
+        let result = self.clmul(u64::ALL_BITS).extract(0) ^ (u64::ALL_BITS * (*overflow as u64));
+        *overflow = (result & u64::TOP_BIT) > 0;
+        result
     }
-    fn from_overflow(overflow: Self::Overflow) -> Self {
-        overflow
+    fn from_overflow(overflow: u8) -> Self {
+        overflow as u64
     }
     fn from_bool_overflow(overflow: bool) -> Self {
         overflow.into()
@@ -498,15 +500,15 @@ mod tests {
         test_prev_3(b"       X   X X    X X X  X X X X X    X X  X X    X X   X   X X X   X    X  X  X    X    X    X_ X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X X");
     }
     #[test]
-    fn is_series_start() {
+    fn series_start() {
         let input    = b"XXXX   X X  XXX X XXXXX XXXXXXXXX XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX XXXXXXXXXX          XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX XXXXX X";
         let expected = b"X      X X  X   X X     X         X                                                                                         X                   X                                                                                                                                                                                                                              X     X";
-        let actual: Vec<u64> = chunks64(input).scan(Default::default(), |overflow, input| Some(input.where_eq(b'X').is_series_start(overflow))).collect();
+        let actual: Vec<u64> = chunks64(input).scan(Default::default(), |overflow, input| Some(input.where_eq(b'X').series_start(overflow))).collect();
         let expected: Vec<u64> = chunks64(expected).map(|input| input.where_eq(b'X')).collect();
         assert_eq!(actual, expected);
         let input    = b"                                                                XXXX";
         let expected = b"                                                                X   ";
-        let actual: Vec<u64> = chunks64(input).scan(Default::default(), |overflow, input| Some(input.where_eq(b'X').is_series_start(overflow))).collect();
+        let actual: Vec<u64> = chunks64(input).scan(Default::default(), |overflow, input| Some(input.where_eq(b'X').series_start(overflow))).collect();
         let expected: Vec<u64> = chunks64(expected).map(|input| input.where_eq(b'X')).collect();
         assert_eq!(actual, expected);
     }

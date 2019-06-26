@@ -1,56 +1,56 @@
 use crate::streamable_bitmask::*;
 use packed_simd::*;
-use std::ops::{RangeBounds,Bound};
+use std::ops::{Bound,RangeBounds};
 
 ///
 /// A series of bytes of a particular size which can be
 /// efficiently searched and turned into masks.
 /// 
-pub trait Maskable<Bitmask>: Sized {
+pub trait Maskable<T: StreamableBitmask>: Sized {
     ///
     /// Match all bytes with the given value
     /// 
-    fn where_eq(&self, value: u8) -> Bitmask;
+    fn where_eq(&self, value: u8) -> T;
 
     ///
     /// Match all bytes with the given value
     /// 
-    fn where_ne(&self, value: u8) -> Bitmask;
+    fn where_ne(&self, value: u8) -> T;
 
     ///
     /// Match all bytes greater than the given value
     /// 
-    fn where_gt(&self, min: u8) -> Bitmask;
+    fn where_gt(&self, min: u8) -> T;
 
     ///
     /// Match all bytes greater than or equal to the given value
     /// 
-    fn where_ge(&self, min: u8) -> Bitmask;
+    fn where_ge(&self, min: u8) -> T;
 
     ///
     /// Match all bytes less than the given value
     /// 
-    fn where_lt(&self, max: u8) -> Bitmask;
+    fn where_lt(&self, max: u8) -> T;
 
     ///
     /// Match all bytes less than or equal to the given value
     /// 
-    fn where_le(&self, max: u8) -> Bitmask;
+    fn where_le(&self, max: u8) -> T;
 
     ///
     /// Match all bytes within the given range
     ///
-    fn where_within(&self, range: impl RangeBounds<u8>) -> Bitmask;
+    fn where_within(&self, range: impl RangeBounds<u8>) -> T;
 
     ///
     /// Match all bytes where the 1's in u8 are set
     ///
-    fn where_bits_set(&self, bits: u8) -> Bitmask;
+    fn where_bits_set(&self, bits: u8) -> T;
 
     ///
     /// Match all bytes where the 1's in u8 are not set
     ///
-    fn where_bits_not_set(&self, bits: u8) -> Bitmask;
+    fn where_bits_not_set(&self, bits: u8) -> T;
 }
 
 impl Maskable<u64> for u8x64 {
