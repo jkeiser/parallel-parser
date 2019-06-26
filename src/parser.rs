@@ -185,6 +185,7 @@ pub fn find_strings(input: &SeparatedBits, overflow: &mut FindStringsOverflow) -
     //
     // Check for invalid string characters (00-1F).
     //
+    println!("{:10}: {}", "< 0x20", into_x_str(input.where_lt(0x20)));
     let invalid_string_bytes = input.where_lt(0x20) & strings; // 00-1F
 
     //
@@ -545,9 +546,9 @@ mod tests {
             TestFindStrings {
                 input:                vec![ all(br#" "#), all(br#" "#) ],
                 strings:              vec![ all(br#" "#), all(br#" "#) ],
-                escapes:              vec![],
-                escaped:              vec![],
-                invalid_string_bytes: vec![],
+                escapes:              vec![ ],
+                escaped:              vec![ ],
+                invalid_string_bytes: vec![ ],
             }.test()
         }
         #[test]
@@ -555,9 +556,9 @@ mod tests {
             TestFindStrings {
                 input:                vec![ all(br#""""#), all(br#""""#) ],
                 strings:              vec![ all(br#"X "#), all(br#"X "#) ],
-                escapes:              vec![],
-                escaped:              vec![],
-                invalid_string_bytes: vec![],
+                escapes:              vec![ ],
+                escaped:              vec![ ],
+                invalid_string_bytes: vec![ ],
             }.test()
         }
         #[test]
@@ -565,9 +566,9 @@ mod tests {
             TestFindStrings {
                 input:                vec![ head((0..100).fold(Vec::<u8>::new(), |mut v, n| { if v.len() + n + 2 < 512 { v.push(b'"'); v.append(&mut b" ".repeat(n)); v.push(b'"'); }; v })) ],
                 strings:              vec![ head((0..100).fold(Vec::<u8>::new(), |mut v, n| { if v.len() + n + 2 < 512 { v.push(b'X'); v.append(&mut b"X".repeat(n)); v.push(b' '); }; v })) ],
-                escapes:              vec![],
-                escaped:              vec![],
-                invalid_string_bytes: vec![],
+                escapes:              vec![ ],
+                escaped:              vec![ ],
+                invalid_string_bytes: vec![ ],
             }.test()
         }
         #[test]
@@ -575,9 +576,9 @@ mod tests {
             TestFindStrings {
                 input:                vec![ head((0..100).fold(Vec::<u8>::new(), |mut v, n| { if v.len() + n + 3 < 512 { v.push(b'"'); v.append(&mut b" ".repeat(n)); v.push(b'"'); v.push(b',')}; v })) ],
                 strings:              vec![ head((0..100).fold(Vec::<u8>::new(), |mut v, n| { if v.len() + n + 3 < 512 { v.push(b'X'); v.append(&mut b"X".repeat(n)); v.push(b' '); v.push(b' ')}; v })) ],
-                escapes:              vec![],
-                escaped:              vec![],
-                invalid_string_bytes: vec![],
+                escapes:              vec![ ],
+                escaped:              vec![ ],
+                invalid_string_bytes: vec![ ],
             }.test()
         }
         #[test]
@@ -585,9 +586,9 @@ mod tests {
             TestFindStrings {
                 input:                vec![ head(br#"""#.concat(br#"X"#.repeat(510)).concat(br#"""#)) ],
                 strings:              vec![ head(br#"X"#.concat(br#"X"#.repeat(510)).concat(br#" "#)) ],
-                escapes:              vec![],
-                escaped:              vec![],
-                invalid_string_bytes: vec![],
+                escapes:              vec![ ],
+                escaped:              vec![ ],
+                invalid_string_bytes: vec![ ],
             }.test()
         }
         #[test]
@@ -595,9 +596,9 @@ mod tests {
             TestFindStrings {
                 input:                vec![ head(br#"""#.concat(br#"X"#.repeat(509)).concat(br#"""#)) ],
                 strings:              vec![ head(br#"X"#.concat(br#"X"#.repeat(509)).concat(br#" "#)) ],
-                escapes:              vec![],
-                escaped:              vec![],
-                invalid_string_bytes: vec![],
+                escapes:              vec![ ],
+                escaped:              vec![ ],
+                invalid_string_bytes: vec![ ],
             }.test()
         }
         #[test]
@@ -605,9 +606,9 @@ mod tests {
             TestFindStrings {
                 input:                vec![ tail(br#"""#.concat(br#"X"#.repeat(509)).concat(br#"""#)) ],
                 strings:              vec![ tail(br#"X"#.concat(br#"X"#.repeat(509)).concat(br#" "#)) ],
-                escapes:              vec![],
-                escaped:              vec![],
-                invalid_string_bytes: vec![],
+                escapes:              vec![ ],
+                escaped:              vec![ ],
+                invalid_string_bytes: vec![ ],
             }.test()
         }
 
@@ -616,9 +617,9 @@ mod tests {
             TestFindStrings {
                 input:                vec![ tail(br#"""#), head(br#"""#) ],
                 strings:              vec![ tail(br#"X"#), head(br#" "#) ],
-                escapes:              vec![],
-                escaped:              vec![],
-                invalid_string_bytes: vec![],
+                escapes:              vec![ ],
+                escaped:              vec![ ],
+                invalid_string_bytes: vec![ ],
             }.test()
         }
         #[test]
@@ -626,9 +627,9 @@ mod tests {
             TestFindStrings {
                 input:                vec![ tail(br#"""#), all(br#" "#), all(br#" "#), head(br#"""#) ],
                 strings:              vec![ tail(br#"X"#), all(br#"X"#), all(br#"X"#), head(br#" "#) ],
-                escapes:              vec![],
-                escaped:              vec![],
-                invalid_string_bytes: vec![],
+                escapes:              vec![ ],
+                escaped:              vec![ ],
+                invalid_string_bytes: vec![ ],
             }.test()
         }
         #[test]
@@ -636,9 +637,9 @@ mod tests {
             TestFindStrings {
                 input:                vec![ head(br#"""#), chunk(br#" "#.repeat(511),br#"""#) ],
                 strings:              vec![  all(br#"X"#), chunk(br#"X"#.repeat(511),br#" "#) ],
-                escapes:              vec![],
-                escaped:              vec![],
-                invalid_string_bytes: vec![],
+                escapes:              vec![ ],
+                escaped:              vec![ ],
+                invalid_string_bytes: vec![ ],
             }.test()
         }
         #[test]
@@ -646,9 +647,9 @@ mod tests {
             TestFindStrings {
                 input:                vec![ head(br#"""#), all(br#" "#), all(br#" "#), chunk(br#" "#.repeat(511),br#"""#) ],
                 strings:              vec![  all(br#"X"#), all(br#"X"#), all(br#"X"#), chunk(br#"X"#.repeat(511),br#" "#) ],
-                escapes:              vec![],
-                escaped:              vec![],
-                invalid_string_bytes: vec![],
+                escapes:              vec![ ],
+                escaped:              vec![ ],
+                invalid_string_bytes: vec![ ],
             }.test()
         }
         #[test]
@@ -658,7 +659,27 @@ mod tests {
                 strings:              vec![ head(br#"XXX "#) ],
                 escapes:              vec![ head(br#" X  "#) ],
                 escaped:              vec![ head(br#"  X "#) ],
-                invalid_string_bytes: vec![],
+                invalid_string_bytes: vec![ ],
+            }.test()
+        }
+        #[test]
+        fn valid_string_bytes() {
+            TestFindStrings {
+                input:                vec![ head(br#"""#.concat((0x20..=0xFF).filter(|&b| b != b'\\' && b != b'"').map(|b| b    ).collect::<Vec<u8>>()).concat(br#"""#)) ],
+                strings:              vec![ head(br#"X"#.concat((0x20..=0xFF).filter(|&b| b != b'\\' && b != b'"').map(|_| b'X' ).collect::<Vec<u8>>()).concat(br#" "#)) ],
+                escapes:              vec![ ],
+                escaped:              vec![ ],
+                invalid_string_bytes: vec![ ],
+            }.test()
+        }
+        #[test]
+        fn invalid_string_bytes() {
+            TestFindStrings {
+                input:                vec![ head(br#"""#.concat((0x00..=0x19).map(|b| b    ).collect::<Vec<u8>>()).concat(br#"""#)) ],
+                strings:              vec![ head(br#"X"#.concat((0x00..=0x19).map(|_| b'X' ).collect::<Vec<u8>>()).concat(br#" "#)) ],
+                escapes:              vec![ ],
+                escaped:              vec![ ],
+                invalid_string_bytes: vec![ head(br#" "#.concat((0x00..=0x19).map(|_| b'X' ).collect::<Vec<u8>>()).concat(br#" "#))],
             }.test()
         }
 
@@ -668,9 +689,9 @@ mod tests {
             TestFindStrings {
                 input:       vec![ tail(br#"""#), all(br#" "#), head(br#"""#) ],
                 strings:     vec![ tail(br#"X"#), all(br#"X"#), head(br#" "#) ],
-                escapes:     vec![],
-                escaped:     vec![],
-                invalid_string_bytes: vec![],
+                escapes:     vec![ ],
+                escaped:     vec![ ],
+                invalid_string_bytes: vec![ ],
             }.test()
         }
         #[test]
@@ -680,7 +701,7 @@ mod tests {
                 escapes:     vec![ tail(br#" X"#), chunk(br#" "#,br#" "#) ],
                 escaped:     vec![ tail(br#"  "#), chunk(br#"X"#,br#" "#) ],
                 strings:     vec![ tail(br#"XX"#), chunk(br#"X"#.repeat(511),br#" "#) ],
-                invalid_string_bytes: vec![],
+                invalid_string_bytes: vec![ ],
             }.test()
         }
         #[test]
@@ -690,7 +711,7 @@ mod tests {
                 escapes:     vec![ tail(br#" "#), all(br#"X "#) ],
                 escaped:     vec![ tail(br#" "#), all(br#" X"#) ],
                 strings:     vec![ tail(br#"X"#), all(br#"XX"#) ],
-                invalid_string_bytes: vec![],
+                invalid_string_bytes: vec![ ],
             }.test()
         }
         #[test]
@@ -700,7 +721,7 @@ mod tests {
                 escapes:     vec![ tail(br#" X"#), all(br#" X"#), head(br#"  "#) ],
                 escaped:     vec![ tail(br#"  "#), all(br#"X "#), head(br#"X "#) ],
                 strings:     vec![ tail(br#"XX"#), all(br#"XX"#), head(br#"X "#) ],
-                invalid_string_bytes: vec![],
+                invalid_string_bytes: vec![ ],
             }.test()
         }
         #[test]
@@ -710,7 +731,7 @@ mod tests {
                 escapes:     vec![ tail(br#" X"#), all(br#" X"#), all(br#" X"#), head(br#"  "#) ],
                 escaped:     vec![ tail(br#"  "#), all(br#"X "#), all(br#"X "#), head(br#"X "#) ],
                 strings:     vec![ tail(br#"XX"#), all(br#"XX"#), all(br#"XX"#), head(br#"X "#) ],
-                invalid_string_bytes: vec![],
+                invalid_string_bytes: vec![ ],
             }.test()
         }
         #[test]
@@ -720,7 +741,7 @@ mod tests {
                 escapes:     vec![ tail(br#" X"#), all(br#" X"#), all(br#" X"#), chunk(br#" "#,br#"X X"#), all(br#" X"#), all(br#" X"#), all(br#" X"#), head(br#"  "#) ],
                 escaped:     vec![ tail(br#"  "#), all(br#"X "#), all(br#"X "#), chunk(br#"X"#,br#" X "#), all(br#"X "#), all(br#"X "#), all(br#"X "#), head(br#"X "#) ],
                 strings:     vec![ tail(br#"XX"#), all(br#"XX"#), all(br#"XX"#),  all(br#"XX"#),  all(br#"XX"#), all(br#"XX"#), all(br#"XX"#), head(br#"X "#) ],
-                invalid_string_bytes: vec![],
+                invalid_string_bytes: vec![ ],
             }.test()
         }
         #[test]
@@ -730,7 +751,7 @@ mod tests {
                 escapes:     vec![ tail(br#" "#), head(br#"X X  "#) ],
                 escaped:     vec![ tail(br#" "#), head(br#" X X "#) ],
                 strings:     vec![ tail(br#"X"#), head(br#"XXXX "#) ],
-                invalid_string_bytes: vec![],
+                invalid_string_bytes: vec![ ],
             }.test()
         }
         #[test]
@@ -740,7 +761,7 @@ mod tests {
                 escapes:     vec![ tail(br#" X"#), head(br#" X X  "#) ],
                 escaped:     vec![ tail(br#"  "#), head(br#"X X X "#) ],
                 strings:     vec![ tail(br#"XX"#), head(br#"XXXXX "#) ],
-                invalid_string_bytes: vec![],
+                invalid_string_bytes: vec![ ],
             }.test()
         }
         #[test]
@@ -750,7 +771,7 @@ mod tests {
                 escapes:     vec![ tail(br#" "#), head(br#"X X X  "#) ],
                 escaped:     vec![ tail(br#" "#), head(br#" X X X "#) ],
                 strings:     vec![ tail(br#"X"#), head(br#"XXXXXX "#) ],
-                invalid_string_bytes: vec![],
+                invalid_string_bytes: vec![ ],
             }.test()
         }
         #[test]
@@ -760,7 +781,7 @@ mod tests {
                 escapes:     vec![ tail(br#" X"#), head(br#" X X  "#) ],
                 escaped:     vec![ tail(br#"  "#), head(br#"X X X "#) ],
                 strings:     vec![ tail(br#"XX"#), head(br#"XXXXX "#) ],
-                invalid_string_bytes: vec![],
+                invalid_string_bytes: vec![ ],
             }.test()
         }
         #[test]
@@ -770,7 +791,7 @@ mod tests {
                 escapes:     vec![ tail(br#" "#), chunk(br#"X "#.repeat((512-2)/2),br#"X "#), head(br#" "#) ],
                 escaped:     vec![ tail(br#" "#), chunk(br#" X"#.repeat((512-2)/2),br#" X"#), head(br#" "#) ],
                 strings:     vec![ tail(br#"X"#), chunk(br#"XX"#.repeat((512-2)/2),br#"XX"#), head(br#" "#) ],
-                invalid_string_bytes: vec![],
+                invalid_string_bytes: vec![ ],
             }.test()
         }
         #[test]
@@ -780,7 +801,7 @@ mod tests {
                 escapes:     vec![ tail(br#" X"#), chunk(br#" X"#.repeat((512-2)/2),br#"  "#) ],
                 escaped:     vec![ tail(br#"  "#), chunk(br#"X "#.repeat((512-2)/2),br#"X "#) ],
                 strings:     vec![ tail(br#"XX"#), chunk(br#"XX"#.repeat((512-2)/2),br#"X "#) ],
-                invalid_string_bytes: vec![],
+                invalid_string_bytes: vec![ ],
             }.test()
         }
         #[test]
@@ -790,7 +811,7 @@ mod tests {
                 escapes:     vec![ tail(br#" "#), chunk(br#" "#,br#"X "#.repeat((512-2)/2).concat(br#"X"#)), head(br#"  "#) ],
                 escaped:     vec![ tail(br#" "#), chunk(br#" "#,br#" X"#.repeat((512-2)/2).concat(br#" "#)), head(br#"X "#) ],
                 strings:     vec![ tail(br#"X"#), chunk(br#"X"#,br#"XX"#.repeat((512-2)/2).concat(br#"X"#)), head(br#"X "#) ],
-                invalid_string_bytes: vec![],
+                invalid_string_bytes: vec![ ],
             }.test()
         }
         #[test]
@@ -800,7 +821,7 @@ mod tests {
                 escapes:     vec![ tail(br#" X"#), chunk(br#" "#,br#"X "#.repeat((512-2)/2).concat(br#"X"#)), head(br#"  "#) ],
                 escaped:     vec![ tail(br#"  "#), chunk(br#"X"#,br#" X"#.repeat((512-2)/2).concat(br#" "#)), head(br#"X "#) ],
                 strings:     vec![ tail(br#"XX"#), chunk(br#"X"#,br#"XX"#.repeat((512-2)/2).concat(br#"X"#)), head(br#"X "#) ],
-                invalid_string_bytes: vec![],
+                invalid_string_bytes: vec![ ],
             }.test()
         }
         #[test]
@@ -810,7 +831,7 @@ mod tests {
                 escapes:     vec![ tail(br#" "#), head(br#"X X  X X X X  X X X X X X  X X X X X X X X  X X X X X X X X X X  "#.repeat(1)) ],
                 escaped:     vec![ tail(br#" "#), head(br#" X X  X X X X  X X X X X X  X X X X X X X X  X X X X X X X X X X "#.repeat(1)) ],
                 strings:     vec![ tail(br#"X"#), head(br#"XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX "#.repeat(1)) ],
-                invalid_string_bytes: vec![],
+                invalid_string_bytes: vec![ ],
             }.test()
         }
         #[test]
@@ -820,7 +841,7 @@ mod tests {
                 escapes:     vec![ tail(br#" X"#), head(br#"  X  X X X X  X X X X X X  X X X X X X X X  X X X X X X X X X X  "#.repeat(1)) ],
                 escaped:     vec![ tail(br#"  "#), head(br#"X  X  X X X X  X X X X X X  X X X X X X X X  X X X X X X X X X X "#.repeat(1)) ],
                 strings:     vec![ tail(br#"XX"#), head(br#"XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX "#.repeat(1)) ],
-                invalid_string_bytes: vec![],
+                invalid_string_bytes: vec![ ],
             }.test()
         }
 
@@ -831,7 +852,7 @@ mod tests {
                 escapes:     vec![ tail(br#" "#),  all(br#"X "#), head(br#" "#) ],
                 escaped:     vec![ tail(br#" "#),  all(br#" X"#), head(br#" "#) ],
                 strings:     vec![ tail(br#"X"#),  all(br#"XX"#), head(br#" "#) ],
-                invalid_string_bytes: vec![],
+                invalid_string_bytes: vec![ ],
             }.test()
         }
         #[test]
@@ -841,7 +862,7 @@ mod tests {
                 escapes:     vec![ tail(br#" X"#), chunk(br#"  "#,br#"X "#.repeat((512-2)/2)), head(br#" "#) ],
                 escaped:     vec![ tail(br#"  "#), chunk(br#"X "#,br#" X"#.repeat((512-2)/2)), head(br#" "#) ],
                 strings:     vec![ tail(br#"XX"#), chunk(br#"XX"#,br#"XX"#.repeat((512-2)/2)), head(br#" "#) ],
-                invalid_string_bytes: vec![],
+                invalid_string_bytes: vec![ ],
             }.test()
         }
 
@@ -852,7 +873,7 @@ mod tests {
                 escapes:     vec![ tail(br#" "#), chunk(br#" X"#,br#" X"#.repeat((512-2)/2)), head(br#"  "#) ],
                 escaped:     vec![ tail(br#" "#), chunk(br#"  "#,br#"X "#.repeat((512-2)/2)), head(br#"X "#) ],
                 strings:     vec![ tail(br#"X"#), chunk(br#"XX"#,br#"XX"#.repeat((512-2)/2)), head(br#"X "#) ],
-                invalid_string_bytes: vec![],
+                invalid_string_bytes: vec![ ],
             }.test()
         }
         #[test]
@@ -862,7 +883,7 @@ mod tests {
                 escapes:     vec![ tail(br#" X"#), chunk(br#" X"#,br#" X"#.repeat((512-2)/2)), head(br#"  "#) ],
                 escaped:     vec![ tail(br#"  "#), chunk(br#"X "#,br#"X "#.repeat((512-2)/2)), head(br#"X "#) ],
                 strings:     vec![ tail(br#"XX"#), chunk(br#"XX"#,br#"XX"#.repeat((512-2)/2)), head(br#"X "#) ],
-                invalid_string_bytes: vec![],
+                invalid_string_bytes: vec![ ],
             }.test()
         }
         #[test]
@@ -872,7 +893,7 @@ mod tests {
                 escapes:     vec![ tail(br#" "#),  head(br#"X  "#.concat(br#"X  "#.repeat((512-4)/3)).concat(br#" "#)) ],
                 escaped:     vec![ tail(br#" "#),  head(br#" X "#.concat(br#" X "#.repeat((512-4)/3)).concat(br#" "#)) ],
                 strings:     vec![ tail(br#"X"#),  head(br#"XXX"#.concat(br#"XXX"#.repeat((512-4)/3)).concat(br#" "#)) ],
-                invalid_string_bytes: vec![],
+                invalid_string_bytes: vec![ ],
             }.test()
         }
         #[test]
@@ -882,7 +903,7 @@ mod tests {
                 escapes:     vec![ tail(br#" X"#),  head(br#" X "#.concat(br#"X  "#.repeat((512-4)/3)).concat(br#" "#)) ],
                 escaped:     vec![ tail(br#"  "#),  head(br#"X X"#.concat(br#" X "#.repeat((512-4)/3)).concat(br#" "#)) ],
                 strings:     vec![ tail(br#"XX"#),  head(br#"XXX"#.concat(br#"XXX"#.repeat((512-4)/3)).concat(br#" "#)) ],
-                invalid_string_bytes: vec![],
+                invalid_string_bytes: vec![ ],
             }.test()
         }
         #[test]
@@ -892,7 +913,7 @@ mod tests {
                 escapes:     vec![ tail(br#" "#),  head(br#" X "#.concat(br#" X "#.repeat((512-4)/3)).concat(br#" "#)) ],
                 escaped:     vec![ tail(br#" "#),  head(br#"  X"#.concat(br#"  X"#.repeat((512-4)/3)).concat(br#" "#)) ],
                 strings:     vec![ tail(br#"X"#),  head(br#"XXX"#.concat(br#"XXX"#.repeat((512-4)/3)).concat(br#" "#)) ],
-                invalid_string_bytes: vec![],
+                invalid_string_bytes: vec![ ],
             }.test()
         }
         #[test]
@@ -902,7 +923,7 @@ mod tests {
                 escapes:     vec![ tail(br#" X"#),  head(br#" X "#.concat(br#" X "#.repeat((512-4)/3)).concat(br#" "#)) ],
                 escaped:     vec![ tail(br#"  "#),  head(br#"X X"#.concat(br#"  X"#.repeat((512-4)/3)).concat(br#" "#)) ],
                 strings:     vec![ tail(br#"XX"#),  head(br#"XXX"#.concat(br#"XXX"#.repeat((512-4)/3)).concat(br#" "#)) ],
-                invalid_string_bytes: vec![],
+                invalid_string_bytes: vec![ ],
             }.test()
         }
     }

@@ -68,12 +68,10 @@ impl SeparatedBits {
         bits.fold(u64x8::ALL_BITS, |acc, n| acc & (self[n] ^ mask_from_bool(b.bit(n))))
     }
     pub fn where_bits_le(&self, b: u8, bits: impl DoubleEndedIterator<Item=usize>) -> u64x8 {
-        let (result, _) = self.bits_le(b, bits);
-        result
+        !self.where_bits_gt(b, bits)
     }
     pub fn where_bits_lt(&self, b: u8, bits: impl DoubleEndedIterator<Item=usize>) -> u64x8 {
-        let (result, decided) = self.bits_le(b, bits);
-        result & !decided
+        !self.where_bits_ge(b, bits)
     }
     pub fn where_bits_ge(&self, b: u8, bits: impl DoubleEndedIterator<Item=usize>) -> u64x8 {
         let (result, decided) = self.bits_gt(b, bits);
@@ -123,47 +121,6 @@ impl SeparatedBits {
         // The 5th bit is the only difference between lower and uppercase
         self.where_bits_within(range, (0..=4).chain(6..=7))
     }
-    fn bits_le(&self, b: u8, bits: impl DoubleEndedIterator<Item=usize>) -> (u64x8, u64x8) {
-        let mut result = u64x8::ALL_BITS;
-        let mut decided = u64x8::NO_BITS;
-
-        // BRANCH NOTE: we're assuming the compiler is smart enough to unroll the loop and
-        // optimize this if away for constant values of b. Test that assumption.
-        for n in bits.rev() {
-            let a = self[n];
-            if b.bit(n) {
-                // In all cases here, b == 1
-                //  a | b | decided | result | Case    |
-                // ---|---|---------|--------|---------|
-                //  0 | 1 | 0 -> 1  | 1      | a <  b  |
-                //  0 | 1 | 1       | 0      | a >  b  |
-                //  0 | 1 | 1       | 1      | a <  b  |
-                //  1 | 1 | 0       | 1      | a == b? |
-                //  1 | 1 | 1       | 0      | a >  b  |
-                //  1 | 1 | 1       | 1      | a <  b  |
-                // Note in the above table, result doesn't ever get flipped here (because it
-                // defaults to 1, so we just have to set decided if we've figured out the answer)
-                decided |= !a;
-            } else {
-                // In all cases here, b == 0
-                //  a | b | decided | result | Case    |
-                // ---|---|---------|--------|---------|
-                //  0 | 0 | 0       | 1      | a == b? |
-                //  0 | 0 | 1       | 0      | a >  b  |
-                //  0 | 0 | 1       | 1      | a <  b  |
-                //  1 | 0 | 0 -> 1  | 1 -> 0 | a >  b  |
-                //  1 | 0 | 1       | 0      | a >  b  |
-                //  1 | 0 | 1       | 1      | a <  b  |
-                result = (result & decided) | a; 
-                decided |= a;
-            }
-        }
-
-        // NOTE: we're assuming that any work on any low zeroes will be optimized away as well,
-        // since zeroes can only affect decided, not the result.
-
-        (result, decided)
-    }
     fn bits_gt(&self, b: u8, bits: impl DoubleEndedIterator<Item=usize>) -> (u64x8, u64x8) {
         let mut result = u64x8::NO_BITS;
         let mut decided = u64x8::NO_BITS;
@@ -173,7 +130,8 @@ impl SeparatedBits {
         for n in bits.rev() {
             let a = self[n];
             println!("Comparing to bit {} of {}: {}", n, b, b.bit(n));
-            println!("a: {:?}", a);
+            // println!("a: {:?}", a);
+            println!("{:10}: {:064b}", "a", a.extract(0).reverse_bits());
             if b.bit(n) {
                 // b == 1
                 //  a | b | decided | result | Case    |
@@ -197,11 +155,13 @@ impl SeparatedBits {
                 //  1 | 0 | 0 -> 1  | 0 -> 1 | a >  b  |
                 //  1 | 0 | 1       | 0      | a <  b  |
                 //  1 | 0 | 1       | 1      | a >  b  |
-                result = (result & decided) | a;
+                result = (result & decided) | (a & !decided);
                 decided |= a;
             }
-            println!("result: {:?}", result);
-            println!("decided: {:?}", decided);
+            println!("{:10}: {:064b}", "result", result.extract(0).reverse_bits());
+            println!("{:10}: {:064b}", "decided", decided.extract(0).reverse_bits());
+            // println!("result: {:?}", result);
+            // println!("decided: {:?}", decided);
         }
 
         // NOTE: we're assuming that any work on any low zeroes will be optimized away as well,
