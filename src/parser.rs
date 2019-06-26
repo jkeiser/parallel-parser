@@ -11,11 +11,11 @@ pub struct ParsedChunk {
     pub invalid_utf8: u64x8,
 
     ///
-    /// The location of all backslashes
+    /// The location of all escaping backslashes
     /// 
-    pub backslashes: u64x8,
+    pub escapes: u64x8,
     ///
-    /// Escaped characters (so you can mask out non-backslashes)
+    /// Escaped characters (characters with an escaping backslash in front of them, including \\)
     /// 
     pub escaped: u64x8,
     ///
@@ -63,10 +63,10 @@ pub struct ParseChunkOverflow {
 pub fn parse_chunk(input: &[u8;512], overflow: &mut ParseChunkOverflow) -> ParsedChunk {
     let bits = separate_bits(input);
     let invalid_utf8 = validate_utf8(&bits, &mut overflow.validate_utf8_overflow);
-    let FindStrings { backslashes, escaped, strings, invalid_string_bytes } = find_strings(&bits, &mut overflow.find_strings_overflow);
+    let FindStrings { strings, escapes, escaped, invalid_string_bytes } = find_strings(&bits, &mut overflow.find_strings_overflow);
     let FindLiteralNames { true_literal, false_literal, null_literal, literal_name, prev_not_literal_name } = find_literal_names(&bits, &mut overflow.find_literal_names_overflow);
 
-    ParsedChunk { backslashes, escaped, strings, invalid_utf8, invalid_string_bytes, true_literal, false_literal, null_literal, literal_name, prev_not_literal_name }
+    ParsedChunk { escapes, escaped, strings, invalid_utf8, invalid_string_bytes, true_literal, false_literal, null_literal, literal_name, prev_not_literal_name }
 }
 
 
@@ -79,9 +79,9 @@ pub struct FindStrings {
     /// 
     pub strings: u64x8,
     ///
-    /// Locations of all backslashes.
+    /// Locations of all escaping backslashes.
     /// 
-    pub backslashes: u64x8,
+    pub escapes: u64x8,
     ///
     /// The locations of escaped characters (the n \n or \\\n).
     /// 
@@ -100,7 +100,9 @@ pub struct FindStrings {
 
 #[derive(Clone,Debug,Default)]
 pub struct FindStringsOverflow {
-    after_odd_series_overflow: AfterOddSeriesOverflow,
+    starts_backslash_series: u8,
+    escaped: u8,
+    backslash_series_starting_on_odd_boundary: bool,
     strings_overflow: bool,
     // escaped_unicode_hex_1: u8,
     // escaped_unicode_hex_2: u8,
@@ -133,36 +135,61 @@ pub fn find_strings(input: &SeparatedBits, overflow: &mut FindStringsOverflow) -
     println!("{:10}: {}", "bit6", into_x_str(input[6]));
     println!("{:10}: {}", "bit7", into_x_str(input[7]));
 
-    let quotes = input.where_eq(b'"');
-    println!("{:10}: {}", "quotes", into_x_str(quotes));
+    // Find quotes. Interestingly, quote and backslash are near mirrors. It's more efficient to test
+    // quote     = 00100010
+    // backslash = 01011100
+    use std::iter::once;
+    let backslash_or_quote = !input[0] & !input[7] & input.where_bits_same(once(1).chain(once(5))) & input.where_bits_same((2..=4).chain(once(6))) & input.where_bits_different(1..=2);
+    let quote = backslash_or_quote & input[1];
+    println!("{:10}: {}", "quotes", into_x_str(quote));
     // If there are no quotes, AND we're not in a string, don't bother with backslashes, escapes, or
     // anything else.
     // BRANCH NOTE: Nearly all JSON files have strings. This is unlikely to trigger in the negative
     // (and therefore won't mispredict), but when it does we'll save some significant instructions
     // (CMUL particularly).
-    if !quotes.any() && !overflow.strings_overflow {
+    if !quote.any() && !overflow.strings_overflow {
         return Default::default();
     }
 
     //
     // Find backslashed characters (including quotes).
     //
-    let backslashes = input.where_eq(b'\\');
-    println!("{:10}: {}", "backslashes", into_x_str(backslashes));
-    let escaped = backslashes.after_odd_series_end(&mut overflow.after_odd_series_overflow);
+    // First, find series of backslashes that start on an even boundaries.
+    //
+    let backslash = backslash_or_quote & !input[1];
+    println!("{:10}: {}", "backslash", into_x_str(backslash));
+    let starts_backslash_series = backslash.starts_series(&mut overflow.starts_backslash_series);
+    println!("starts_backslash_series:");
+    println!("{:10}: {}", "", into_x_str(starts_backslash_series));
+    let backslash_series_starting_on_odd_boundary = backslash.series_not_starting_with(starts_backslash_series & u64x8::EVEN_BITS, &mut overflow.backslash_series_starting_on_odd_boundary);
+    println!("backslash_series_starting_on_odd_boundary:");
+    println!("{:10}: {}", "", into_x_str(backslash_series_starting_on_odd_boundary));
+
+    // Next, turn series of backslashes on even boundaries into 10101010 using XOR,
+    // and series on odd boundaries the same way, to get the backslashes that actually escape
+    // something.
+    let escapes = (u64x8::ODD_BITS & backslash_series_starting_on_odd_boundary) |
+                  (u64x8::EVEN_BITS & backslash & !backslash_series_starting_on_odd_boundary);
+    println!("{:10}: {}", "escapes", into_x_str(escapes));
+    // The escaped characters are the characters right after a "real" escaping backslash.
+    let escaped = escapes.prev(&mut overflow.escaped);
     println!("{:10}: {}", "escaped", into_x_str(escaped));
 
     //
     // Find characters in strings (every other ", not counting \").
     //
-    println!("{:10}: {}", "realquotes", into_x_str(quotes & !escaped));
-    let strings = (quotes & !escaped).between_pairs(&mut overflow.strings_overflow);
+    println!("{:10}: {}", "realquotes", into_x_str(quote & !escaped));
+    let strings = (quote & !escaped).between_pairs(&mut overflow.strings_overflow);
     println!("{:10}: {}", "strings", into_x_str(strings));
 
     //
     // Check for invalid string characters (00-1F).
     //
     let invalid_string_bytes = input.where_lt(0x20) & strings; // 00-1F
+
+    //
+    // TODO ensure we don't *end* the stream in a string.
+    //
 
     // //
     // // Find Unicode escapes (\uDDDD ranges)
@@ -175,7 +202,7 @@ pub fn find_strings(input: &SeparatedBits, overflow: &mut FindStringsOverflow) -
     //     let invalid_escaped_unicode_hex = escaped_unicode_hex & !hex_digit;
     //     (escaped_unicode_hex, invalid_escaped_unicode_hex)
     // }
-    FindStrings { backslashes, escaped, strings, invalid_string_bytes }
+    FindStrings { strings, escapes, escaped, invalid_string_bytes }
 }
 
 #[derive(Clone,Debug,Default)]
@@ -402,6 +429,7 @@ fn into_x_str<T: StreamableBitmask>(mask: T) -> String {
 #[cfg(test)]
 mod tests {
     pub use super::*;
+    use std::fmt::Debug;
 
     const SPACES: [u8;512] = [b' ';512];
 
@@ -411,8 +439,8 @@ mod tests {
     fn into_x_str<T: StreamableBitmask>(mask: T) -> String {
         iter_bits(mask).map(|bit| if bit { 'X' } else { ' ' }).fold(String::with_capacity(T::NUM_BITS as usize), |mut s,bit| { s.push(bit); s })
     }
-    fn assert_bitmasks_eq(actual: u64x8, expected: u64x8, name: &str, input: &[u8;512]) {
-        assert_eq!(actual, expected, "{} didn't match!\n{:10}: {}\n{:10}: {}\n{:10}: {}", name, "actual", into_x_str(actual), "expected", into_x_str(expected), "input", String::from_utf8_lossy(input));
+    fn assert_bitmasks_eq(actual: u64x8, expected: u64x8, name: &str, input: &[u8;512], chunk_num: usize) {
+        assert_eq!(actual, expected, "{} in chunk {} didn't match!\n{:10}: {}\n{:10}: {}\n{:10}: {}", name, chunk_num, "actual", into_x_str(actual), "expected", into_x_str(expected), "input", String::from_utf8_lossy(input));
     }
     fn all(bytes: impl AsRef<[u8]>) -> [u8;512] {
         let bytes = bytes.as_ref();
@@ -446,250 +474,436 @@ mod tests {
         result
     }
 
-    struct With {
-        pub input: Vec<[u8;512]>,
+    trait VecManip<T> {
+        fn concat<A: AsRef<[T]>>(self, other: A) -> Vec<T>;
+        fn overwrite<A: AsRef<[T]>>(self, other: A) -> Vec<T>;
+        fn repeat(self, n: usize) -> Vec<T>;
     }
-    trait Expected {
-        fn test_expected(&self, with: &With);
-    }
-    impl With {
-        pub fn expect<T: Expected>(&self, expected: T) {
-            expected.test_expected(self)
+    impl<T: Clone+Debug, S: AsRef<[T]>> VecManip<T> for S {
+        fn concat<A: AsRef<[T]>>(self, other: A) -> Vec<T> {
+            let a = self.as_ref();
+            let b = other.as_ref();
+            let mut result = Vec::with_capacity(a.len() + b.len());
+            result.extend_from_slice(a);
+            result.extend_from_slice(b);
+            result
+        }
+        fn overwrite<A: AsRef<[T]>>(self, other: A) -> Vec<T> {
+            let a = self.as_ref();
+            let b = other.as_ref();
+            assert!(b.len() < a.len());
+            let mut result = Vec::with_capacity(a.len());
+            result[0..b.len()].clone_from_slice(b);
+            result
+        }
+        fn repeat(self, n: usize) -> Vec<T> {
+            let a = self.as_ref();
+            let mut result = Vec::with_capacity(n * a.len());
+            for _ in 0..n {
+                result.extend_from_slice(a);
+            }
+            result
         }
     }
 
     mod find_strings {
         use super::*;
-        struct FindStrings {
+
+        struct TestFindStrings {
+            input: Vec<[u8;512]>,
             strings: Vec<[u8;512]>,
-            backslashes: Vec<[u8;512]>,
+            escapes: Vec<[u8;512]>,
             escaped: Vec<[u8;512]>,
             invalid_string_bytes: Vec<[u8;512]>,
         }
-        impl Expected for FindStrings {
-            fn test_expected(&self, with: &With) {
-                let num_chunks = with.input.len().max(self.strings.len()).max(self.backslashes.len()).max(self.escaped.len()).max(self.invalid_string_bytes.len());
+        impl TestFindStrings {
+            fn test(&self) {
+                let num_chunks = self.input.len().max(self.strings.len()).max(self.escapes.len()).max(self.escaped.len()).max(self.invalid_string_bytes.len());
                 let expected = (0..num_chunks).map(|i| {
                     let strings = from_x_str(self.strings.get(i).unwrap_or(&SPACES));
-                    let backslashes = from_x_str(self.backslashes.get(i).unwrap_or(&SPACES));
+                    let escapes = from_x_str(self.escapes.get(i).unwrap_or(&SPACES));
                     let escaped = from_x_str(self.escaped.get(i).unwrap_or(&SPACES));
                     let invalid_string_bytes = from_x_str(self.invalid_string_bytes.get(i).unwrap_or(&SPACES));
-                    super::super::FindStrings { strings, backslashes, escaped, invalid_string_bytes }
+                    FindStrings { strings, escapes, escaped, invalid_string_bytes }
                 });
-                let iter_input = || (0..num_chunks).map(|i| with.input.get(i).unwrap_or(&SPACES));
+                let iter_input = || (0..num_chunks).map(|i| self.input.get(i).unwrap_or(&SPACES));
                 let actual = iter_input().scan(Default::default(), |overflow,input| {
+                    println!("{:10}: {}", "input", String::from_utf8_lossy(input));
                     Some(find_strings(&separate_bits(input), overflow))
                 });
-                for ((input, actual), expected) in iter_input().zip(actual).zip(expected) {
-                    assert_bitmasks_eq(actual.strings, expected.strings, "strings", &input);
-                    assert_bitmasks_eq(actual.backslashes, expected.backslashes, "backslashes", &input);
-                    assert_bitmasks_eq(actual.escaped, expected.escaped, "escaped", &input);
-                    assert_bitmasks_eq(actual.invalid_string_bytes, expected.invalid_string_bytes, "invalid_string_bytes", &input);
+                for (i, ((input, actual), expected)) in iter_input().zip(actual).zip(expected).enumerate() {
+                    assert_bitmasks_eq(actual.strings, expected.strings, "strings", &input, i);
+                    assert_bitmasks_eq(actual.escapes, expected.escapes, "escapes", &input, i);
+                    assert_bitmasks_eq(actual.escaped, expected.escaped, "escaped", &input, i);
+                    assert_bitmasks_eq(actual.invalid_string_bytes, expected.invalid_string_bytes, "invalid_string_bytes", &input, i);
                 }
             }
         }
 
         #[test]
-        fn no_backslashes() {
-            With {
-                input:       vec![head(br#"""#), head(br"")] }.expect(FindStrings {
-                backslashes: vec![head(br#" "#), head(br"")],
-                escaped:     vec![head(br#" "#), head(br"")],
-                strings:     vec![ all(br#"X"#),  all(br#"X"#)],
+        fn no_strings() {
+            TestFindStrings {
+                input:                vec![ all(br#" "#), all(br#" "#) ],
+                strings:              vec![ all(br#" "#), all(br#" "#) ],
+                escapes:              vec![],
+                escaped:              vec![],
                 invalid_string_bytes: vec![],
-            })
+            }.test()
+        }
+        #[test]
+        fn all_empty_strings() {
+            TestFindStrings {
+                input:                vec![ all(br#""""#), all(br#""""#) ],
+                strings:              vec![ all(br#"X "#), all(br#"X "#) ],
+                escapes:              vec![],
+                escaped:              vec![],
+                invalid_string_bytes: vec![],
+            }.test()
+        }
+        #[test]
+        fn many_strings() {
+            TestFindStrings {
+                input:                vec![ head((0..100).fold(Vec::<u8>::new(), |mut v, n| { if v.len() + n + 2 < 512 { v.push(b'"'); v.append(&mut b" ".repeat(n)); v.push(b'"'); }; v })) ],
+                strings:              vec![ head((0..100).fold(Vec::<u8>::new(), |mut v, n| { if v.len() + n + 2 < 512 { v.push(b'X'); v.append(&mut b"X".repeat(n)); v.push(b' '); }; v })) ],
+                escapes:              vec![],
+                escaped:              vec![],
+                invalid_string_bytes: vec![],
+            }.test()
+        }
+        #[test]
+        fn many_strings_with_commas() {
+            TestFindStrings {
+                input:                vec![ head((0..100).fold(Vec::<u8>::new(), |mut v, n| { if v.len() + n + 3 < 512 { v.push(b'"'); v.append(&mut b" ".repeat(n)); v.push(b'"'); v.push(b',')}; v })) ],
+                strings:              vec![ head((0..100).fold(Vec::<u8>::new(), |mut v, n| { if v.len() + n + 3 < 512 { v.push(b'X'); v.append(&mut b"X".repeat(n)); v.push(b' '); v.push(b' ')}; v })) ],
+                escapes:              vec![],
+                escaped:              vec![],
+                invalid_string_bytes: vec![],
+            }.test()
+        }
+        #[test]
+        fn one_string_510() {
+            TestFindStrings {
+                input:                vec![ head(br#"""#.concat(br#"X"#.repeat(510)).concat(br#"""#)) ],
+                strings:              vec![ head(br#"X"#.concat(br#"X"#.repeat(510)).concat(br#" "#)) ],
+                escapes:              vec![],
+                escaped:              vec![],
+                invalid_string_bytes: vec![],
+            }.test()
+        }
+        #[test]
+        fn one_string_509() {
+            TestFindStrings {
+                input:                vec![ head(br#"""#.concat(br#"X"#.repeat(509)).concat(br#"""#)) ],
+                strings:              vec![ head(br#"X"#.concat(br#"X"#.repeat(509)).concat(br#" "#)) ],
+                escapes:              vec![],
+                escaped:              vec![],
+                invalid_string_bytes: vec![],
+            }.test()
+        }
+        #[test]
+        fn one_string_509_alternate() {
+            TestFindStrings {
+                input:                vec![ tail(br#"""#.concat(br#"X"#.repeat(509)).concat(br#"""#)) ],
+                strings:              vec![ tail(br#"X"#.concat(br#"X"#.repeat(509)).concat(br#" "#)) ],
+                escapes:              vec![],
+                escaped:              vec![],
+                invalid_string_bytes: vec![],
+            }.test()
+        }
+
+        #[test]
+        fn string_across_boundaries() {
+            TestFindStrings {
+                input:                vec![ tail(br#"""#), head(br#"""#) ],
+                strings:              vec![ tail(br#"X"#), head(br#" "#) ],
+                escapes:              vec![],
+                escaped:              vec![],
+                invalid_string_bytes: vec![],
+            }.test()
+        }
+        #[test]
+        fn string_across_boundaries_multiple_chunks() {
+            TestFindStrings {
+                input:                vec![ tail(br#"""#), all(br#" "#), all(br#" "#), head(br#"""#) ],
+                strings:              vec![ tail(br#"X"#), all(br#"X"#), all(br#"X"#), head(br#" "#) ],
+                escapes:              vec![],
+                escaped:              vec![],
+                invalid_string_bytes: vec![],
+            }.test()
+        }
+        #[test]
+        fn string_across_boundaries_long() {
+            TestFindStrings {
+                input:                vec![ head(br#"""#), chunk(br#" "#.repeat(511),br#"""#) ],
+                strings:              vec![  all(br#"X"#), chunk(br#"X"#.repeat(511),br#" "#) ],
+                escapes:              vec![],
+                escaped:              vec![],
+                invalid_string_bytes: vec![],
+            }.test()
+        }
+        #[test]
+        fn string_across_boundaries_multiple_chunks_long() {
+            TestFindStrings {
+                input:                vec![ head(br#"""#), all(br#" "#), all(br#" "#), chunk(br#" "#.repeat(511),br#"""#) ],
+                strings:              vec![  all(br#"X"#), all(br#"X"#), all(br#"X"#), chunk(br#"X"#.repeat(511),br#" "#) ],
+                escapes:              vec![],
+                escaped:              vec![],
+                invalid_string_bytes: vec![],
+            }.test()
+        }
+        #[test]
+        fn escaped_quote() {
+            TestFindStrings {
+                input:                vec![ head(br#""\"""#) ],
+                strings:              vec![ head(br#"XXX "#) ],
+                escapes:              vec![ head(br#" X  "#) ],
+                escaped:              vec![ head(br#"  X "#) ],
+                invalid_string_bytes: vec![],
+            }.test()
+        }
+
+
+        #[test]
+        fn no_backslashes() {
+            TestFindStrings {
+                input:       vec![ tail(br#"""#), all(br#" "#), head(br#"""#) ],
+                strings:     vec![ tail(br#"X"#), all(br#"X"#), head(br#" "#) ],
+                escapes:     vec![],
+                escaped:     vec![],
+                invalid_string_bytes: vec![],
+            }.test()
         }
         #[test]
         fn no_backslashes_first_backslashed() {
-            With {
-                input:       vec![head(br#"""#), tail(br"\"), head(br" ")] }.expect(FindStrings {
-                backslashes: vec![head(br#" "#), tail(br"X"), head(br" ")],
-                escaped:     vec![head(br#" "#), tail(br" "), head(br"X")],
-                strings:     vec![ all(br#"X"#), all(br#"X"#), all(br#"X"#)],
+            TestFindStrings {
+                input:       vec![ tail(br#""\"#), chunk(br#" "#,br#"""#) ],
+                escapes:     vec![ tail(br#" X"#), chunk(br#" "#,br#" "#) ],
+                escaped:     vec![ tail(br#"  "#), chunk(br#"X"#,br#" "#) ],
+                strings:     vec![ tail(br#"XX"#), chunk(br#"X"#.repeat(511),br#" "#) ],
                 invalid_string_bytes: vec![],
-            })
+            }.test()
         }
         #[test]
-        fn all_backslashes_x() {
-            With {
-                input:       vec![head(br#"""#), all(br"\")] }.expect(FindStrings {
-                backslashes: vec![head(br#" "#), all(br"X")],
-                escaped:     vec![head(br#" "#), all(br" ")],
-                strings:     vec![ all(br#"X"#), all(br#"X"#)],
+        fn all_backslashes() {
+            TestFindStrings {
+                input:       vec![ tail(br#"""#), all(br#"\\"#) ],
+                escapes:     vec![ tail(br#" "#), all(br#"X "#) ],
+                escaped:     vec![ tail(br#" "#), all(br#" X"#) ],
+                strings:     vec![ tail(br#"X"#), all(br#"XX"#) ],
                 invalid_string_bytes: vec![],
-            })
+            }.test()
         }
         #[test]
         fn all_backslashes_first_backslashed() {
-            With {
-                input:       vec![head(br#"""#), chunk(br"",br"\"),all(br"\")] }.expect(FindStrings {
-                backslashes: vec![head(br#" "#), chunk(br"",br"X"),all(br"X")],
-                escaped:     vec![head(br#" "#), chunk(br"",br" "),all(br" "),chunk(br"X",br"")],
-                strings:     vec![ all(br#"X"#), all(br#"X"#), all(br#"X"#), all(br#"X"#)],
+            TestFindStrings {
+                input:       vec![ tail(br#""\"#), all(br#"\\"#), head(br#""""#) ],
+                escapes:     vec![ tail(br#" X"#), all(br#" X"#), head(br#"  "#) ],
+                escaped:     vec![ tail(br#"  "#), all(br#"X "#), head(br#"X "#) ],
+                strings:     vec![ tail(br#"XX"#), all(br#"XX"#), head(br#"X "#) ],
                 invalid_string_bytes: vec![],
-            })
+            }.test()
         }
         #[test]
         fn all_backslashes_first_backslashed_multiple() {
-            With {
-                input:       vec![chunk(br#"""#,br"\"),all(br"\"),all(br"\")] }.expect(FindStrings {
-                backslashes: vec![chunk(br#"""#,br"X"),all(br"X"),all(br"X")],
-                escaped:     vec![chunk(br#"""#,br" "),all(br" "),all(br" "),chunk(br"X",br"")],
-                strings:     vec![ all(br#"X"#), all(br#"X"#), all(br#"X"#), all(br#"X"#)],
+            TestFindStrings {
+                input:       vec![ tail(br#""\"#), all(br#"\\"#), all(br#"\\"#), head(br#""""#) ],
+                escapes:     vec![ tail(br#" X"#), all(br#" X"#), all(br#" X"#), head(br#"  "#) ],
+                escaped:     vec![ tail(br#"  "#), all(br#"X "#), all(br#"X "#), head(br#"X "#) ],
+                strings:     vec![ tail(br#"XX"#), all(br#"XX"#), all(br#"XX"#), head(br#"X "#) ],
                 invalid_string_bytes: vec![],
-            })
+            }.test()
         }
         #[test]
         fn all_backslashes_first_backslashed_multiple_multiple() {
-            With {
-                input:       vec![chunk(br#"""#,br"\"),all(br"\"),all(br"\"),chunk(br" ",br"\\\"),all(br"\"),all(br"\"),all(br"\")] }.expect(FindStrings {
-                backslashes: vec![chunk(br#" "#,br"X"),all(br"X"),all(br"X"),chunk(br" ",br"XXX"),all(br"X"),all(br"X"),all(br"X")],
-                escaped:     vec![chunk(br#" "#,br" "),all(br" "),all(br" "),chunk(br"X",br"   "),all(br" "),all(br" "),all(br" "),chunk(br"X",br"")],
-                strings:     vec![ all(br#"X"#), all(br#"X"#), all(br#"X"#), all(br#"X"#), all(br#"X"#), all(br#"X"#), all(br#"X"#), all(br#"X"#)],
+            TestFindStrings  {
+                input:       vec![ tail(br#""\"#), all(br#"\\"#), all(br#"\\"#), chunk(br#" "#,br#"\\\"#), all(br#"\\"#), all(br#"\\"#), all(br#"\\"#), head(br#""""#) ],
+                escapes:     vec![ tail(br#" X"#), all(br#" X"#), all(br#" X"#), chunk(br#" "#,br#"X X"#), all(br#" X"#), all(br#" X"#), all(br#" X"#), head(br#"  "#) ],
+                escaped:     vec![ tail(br#"  "#), all(br#"X "#), all(br#"X "#), chunk(br#"X"#,br#" X "#), all(br#"X "#), all(br#"X "#), all(br#"X "#), head(br#"X "#) ],
+                strings:     vec![ tail(br#"XX"#), all(br#"XX"#), all(br#"XX"#),  all(br#"XX"#),  all(br#"XX"#), all(br#"XX"#), all(br#"XX"#), head(br#"X "#) ],
                 invalid_string_bytes: vec![],
-            })
+            }.test()
+        }
+        #[test]
+        fn four_backslashes() {
+            TestFindStrings {
+                input:       vec![ tail(br#"""#), head(br#"\\\\""#) ],
+                escapes:     vec![ tail(br#" "#), head(br#"X X  "#) ],
+                escaped:     vec![ tail(br#" "#), head(br#" X X "#) ],
+                strings:     vec![ tail(br#"X"#), head(br#"XXXX "#) ],
+                invalid_string_bytes: vec![],
+            }.test()
         }
         #[test]
         fn four_backslashes_first_backslashed() {
-            With {
-                input:       vec![chunk(br#"""#,br#"\"#),head(br#"\\\\"#)] }.expect(FindStrings {
-                backslashes: vec![chunk(br#" "#,br#"X"#),head(br#"XXXX"#)],
-                escaped:     vec![chunk(br#" "#,br#" "#),head(br#"    X"#)],
-                strings:     vec![  all(br#"X"#),         all(br#"X"#)],
+            TestFindStrings {
+                input:       vec![ tail(br#""\"#), head(br#"\\\\"""#) ],
+                escapes:     vec![ tail(br#" X"#), head(br#" X X  "#) ],
+                escaped:     vec![ tail(br#"  "#), head(br#"X X X "#) ],
+                strings:     vec![ tail(br#"XX"#), head(br#"XXXXX "#) ],
                 invalid_string_bytes: vec![],
-            })
+            }.test()
+        }
+        #[test]
+        fn five_backslashes() {
+            TestFindStrings {
+                input:       vec![ tail(br#"""#), head(br#"\\\\\"""#) ],
+                escapes:     vec![ tail(br#" "#), head(br#"X X X  "#) ],
+                escaped:     vec![ tail(br#" "#), head(br#" X X X "#) ],
+                strings:     vec![ tail(br#"X"#), head(br#"XXXXXX "#) ],
+                invalid_string_bytes: vec![],
+            }.test()
         }
         #[test]
         fn five_backslashes_first_backslashed() {
-            With {
-                input:       vec![chunk(br#"""#,br#"\"#),head(br#"\\\\\"#)] }.expect(FindStrings {
-                backslashes: vec![chunk(br#" "#,br#"X"#),head(br#"XXXXX"#)],
-                escaped:     vec![chunk(br#" "#,br#" "#),head(br#"      "#)],
-                strings:     vec![  all(br#"X"#),         all(br#"X"#)],
+            TestFindStrings {
+                input:       vec![ tail(br#""\"#), head(br#"\\\\\""#) ],
+                escapes:     vec![ tail(br#" X"#), head(br#" X X  "#) ],
+                escaped:     vec![ tail(br#"  "#), head(br#"X X X "#) ],
+                strings:     vec![ tail(br#"XX"#), head(br#"XXXXX "#) ],
                 invalid_string_bytes: vec![],
-            })
+            }.test()
         }
         #[test]
         fn almost_all_backslashes() {
-            With {
-                input:       vec![chunk(br#"""#,br#""#),head(br#"\"#.repeat(511))] }.expect(FindStrings {
-                backslashes: vec![chunk(br#" "#,br#""#),head(br#"X"#.repeat(511))],
-                escaped:     vec![chunk(br#" "#,br#""#),tail(br#"X"#)],
-                strings:     vec![  all(br#"X"#),         all(br#"X"#)],
+            TestFindStrings {
+                input:       vec![ tail(br#"""#), chunk(br#"\\"#.repeat((512-2)/2),br#"\""#), head(br#"""#) ],
+                escapes:     vec![ tail(br#" "#), chunk(br#"X "#.repeat((512-2)/2),br#"X "#), head(br#" "#) ],
+                escaped:     vec![ tail(br#" "#), chunk(br#" X"#.repeat((512-2)/2),br#" X"#), head(br#" "#) ],
+                strings:     vec![ tail(br#"X"#), chunk(br#"XX"#.repeat((512-2)/2),br#"XX"#), head(br#" "#) ],
                 invalid_string_bytes: vec![],
-            })
+            }.test()
         }
         #[test]
         fn almost_all_backslashes_first_backslashed() {
-            With {
-                input:       vec![chunk(br#"""#,br#"\"#),head(br#"\"#.repeat(511))] }.expect(FindStrings {
-                backslashes: vec![chunk(br#" "#,br#"X"#),head(br#"X"#.repeat(511))],
-                escaped:     vec![chunk(br#" "#,br#" "#),tail(br#" "#)],
-                strings:     vec![  all(br#"X"#),         all(br#"X"#)],
+            TestFindStrings {
+                input:       vec![ tail(br#""\"#), chunk(br#"\\"#.repeat((512-2)/2),br#"\""#) ],
+                escapes:     vec![ tail(br#" X"#), chunk(br#" X"#.repeat((512-2)/2),br#"  "#) ],
+                escaped:     vec![ tail(br#"  "#), chunk(br#"X "#.repeat((512-2)/2),br#"X "#) ],
+                strings:     vec![ tail(br#"XX"#), chunk(br#"XX"#.repeat((512-2)/2),br#"X "#) ],
                 invalid_string_bytes: vec![],
-            })
+            }.test()
         }
         #[test]
         fn almost_all_backslashes_alternate() {
-            With {
-                input:       vec![chunk(br#"""#,br#""#),tail(br#"\"#.repeat(511))] }.expect(FindStrings {
-                backslashes: vec![chunk(br#" "#,br#""#),tail(br#"X"#.repeat(511))],
-                escaped:     vec![chunk(br#" "#,br#""#),head(br#""#),               head(br#"X"#)],
-                strings:     vec![  all(br#"X"#),        all(br#"X"#),               all(br#"X"#)],
+            TestFindStrings {
+                input:       vec![ tail(br#"""#), chunk(br#" "#,br#"\\"#.repeat((512-2)/2).concat(br#"\"#)), head(br#""""#) ],
+                escapes:     vec![ tail(br#" "#), chunk(br#" "#,br#"X "#.repeat((512-2)/2).concat(br#"X"#)), head(br#"  "#) ],
+                escaped:     vec![ tail(br#" "#), chunk(br#" "#,br#" X"#.repeat((512-2)/2).concat(br#" "#)), head(br#"X "#) ],
+                strings:     vec![ tail(br#"X"#), chunk(br#"X"#,br#"XX"#.repeat((512-2)/2).concat(br#"X"#)), head(br#"X "#) ],
                 invalid_string_bytes: vec![],
-            })
+            }.test()
         }
         #[test]
         fn almost_all_backslashes_alternate_first_backslashed() {
-            With {
-                input:       vec![chunk(br#"""#,br#"\"#),tail(br#"\"#.repeat(511))] }.expect(FindStrings {
-                backslashes: vec![chunk(br#" "#,br#"X"#),tail(br#"X"#.repeat(511))],
-                escaped:     vec![chunk(br#" "#,br#" "#),head(br#"X"#),              head(br#"X"#)],
-                strings:     vec![  all(br#"X"#),         all(br#"X"#),               all(br#"X"#)],
+            TestFindStrings {
+                input:       vec![ tail(br#""\"#), chunk(br#" "#,br#"\\"#.repeat((512-2)/2).concat(br#"\"#)), head(br#""""#) ],
+                escapes:     vec![ tail(br#" X"#), chunk(br#" "#,br#"X "#.repeat((512-2)/2).concat(br#"X"#)), head(br#"  "#) ],
+                escaped:     vec![ tail(br#"  "#), chunk(br#"X"#,br#" X"#.repeat((512-2)/2).concat(br#" "#)), head(br#"X "#) ],
+                strings:     vec![ tail(br#"XX"#), chunk(br#"X"#,br#"XX"#.repeat((512-2)/2).concat(br#"X"#)), head(br#"X "#) ],
                 invalid_string_bytes: vec![],
-            })
+            }.test()
         }
         #[test]
         fn many_different_backslashes() {
-            With {
-                input:       vec![chunk(br#"""#,br#"\"#),head(br#"\ \\ \\\ \\\\ \\\\\ \\\\\\ \\\\\\\ \\\\\\\\ \\\\\\\\\ \\\\\\\\\\"#.repeat(1))] }.expect(FindStrings {
-                backslashes: vec![chunk(br#" "#,br#"X"#),head(br#"X XX XXX XXXX XXXXX XXXXXX XXXXXXX XXXXXXXX XXXXXXXXX XXXXXXXXXX"#.repeat(1))],
-                escaped:     vec![chunk(br#" "#,br#" "#),head(br#"        X          X              X                  X"#.repeat(1))],
-                strings:     vec![  all(br#"X"#),         all(br#"X"#)],
+            TestFindStrings {
+                input:       vec![ tail(br#"""#), head(br#"\ \\ \\\ \\\\ \\\\\ \\\\\\ \\\\\\\ \\\\\\\\ \\\\\\\\\ \\\\\\\\\\""#.repeat(1)) ],
+                escapes:     vec![ tail(br#" "#), head(br#"X X  X X X X  X X X X X X  X X X X X X X X  X X X X X X X X X X  "#.repeat(1)) ],
+                escaped:     vec![ tail(br#" "#), head(br#" X X  X X X X  X X X X X X  X X X X X X X X  X X X X X X X X X X "#.repeat(1)) ],
+                strings:     vec![ tail(br#"X"#), head(br#"XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX "#.repeat(1)) ],
                 invalid_string_bytes: vec![],
-            })
+            }.test()
         }
         #[test]
         fn many_different_backslashes_first_backslashed() {
-            With {
-                input:       vec![chunk(br#"""#,br#""#),head(br#"\ \\ \\\ \\\\ \\\\\ \\\\\\ \\\\\\\ \\\\\\\\ \\\\\\\\\ \\\\\\\\\\"#.repeat(1))] }.expect(FindStrings {
-                backslashes: vec![chunk(br#" "#,br#""#),head(br#"X XX XXX XXXX XXXXX XXXXXX XXXXXXX XXXXXXXX XXXXXXXXX XXXXXXXXXX"#.repeat(1))],
-                escaped:     vec![chunk(br#" "#,br#""#),head(br#" X      X          X              X                  X"#.repeat(1))],
-                strings:     vec![  all(br#"X"#),         all(br#"X"#)],
+            TestFindStrings {
+                input:       vec![ tail(br#""\"#), head(br#"\ \\ \\\ \\\\ \\\\\ \\\\\\ \\\\\\\ \\\\\\\\ \\\\\\\\\ \\\\\\\\\\""#.repeat(1)) ],
+                escapes:     vec![ tail(br#" X"#), head(br#"  X  X X X X  X X X X X X  X X X X X X X X  X X X X X X X X X X  "#.repeat(1)) ],
+                escaped:     vec![ tail(br#"  "#), head(br#"X  X  X X X X  X X X X X X  X X X X X X X X  X X X X X X X X X X "#.repeat(1)) ],
+                strings:     vec![ tail(br#"XX"#), head(br#"XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX "#.repeat(1)) ],
                 invalid_string_bytes: vec![],
-            })
+            }.test()
         }
 
         #[test]
         fn every_other_backslash() {
-            With {
-                input:       vec![chunk(br#"""#,br#""#),  all(br#"\ "#)] }.expect(FindStrings {
-                backslashes: vec![chunk(br#" "#,br#""#),  all(br#"X "#)],
-                escaped:     vec![chunk(br#" "#,br#""#),  all(br#" X"#)],
-                strings:     vec![  all(br#"X"#),         all(br#"X"#)],
+            TestFindStrings {
+                input:       vec![ tail(br#"""#),  all(br#"\ "#), head(br#"""#) ],
+                escapes:     vec![ tail(br#" "#),  all(br#"X "#), head(br#" "#) ],
+                escaped:     vec![ tail(br#" "#),  all(br#" X"#), head(br#" "#) ],
+                strings:     vec![ tail(br#"X"#),  all(br#"XX"#), head(br#" "#) ],
                 invalid_string_bytes: vec![],
-            })
+            }.test()
         }
         #[test]
         fn every_other_backslash_first_backslashed() {
-            With {
-                input:       vec![chunk(br#"""#,br#"\"#),  all(br#"\ "#)] }.expect(FindStrings {
-                backslashes: vec![chunk(br#" "#,br#"X"#),  all(br#"X "#)],
-                escaped:     vec![chunk(br#" "#,br#" "#), tail(br#" X"#.repeat(512/2-1))],
-                strings:     vec![  all(br#"X"#),          all(br#"X"#)],
+            TestFindStrings {
+                input:       vec![ tail(br#""\"#), chunk(br#"\ "#,br#"\ "#.repeat((512-2)/2)), head(br#"""#) ],
+                escapes:     vec![ tail(br#" X"#), chunk(br#"  "#,br#"X "#.repeat((512-2)/2)), head(br#" "#) ],
+                escaped:     vec![ tail(br#"  "#), chunk(br#"X "#,br#" X"#.repeat((512-2)/2)), head(br#" "#) ],
+                strings:     vec![ tail(br#"XX"#), chunk(br#"XX"#,br#"XX"#.repeat((512-2)/2)), head(br#" "#) ],
                 invalid_string_bytes: vec![],
-            })
+            }.test()
         }
 
         #[test]
         fn every_other_backslash_alternate() {
-            With {
-                input:       vec![chunk(br#"""#,br#""#),  all(br#" \"#)] }.expect(FindStrings {
-                backslashes: vec![chunk(br#" "#,br#""#),  all(br#" X"#)],
-                escaped:     vec![chunk(br#" "#,br#""#), tail(br#"X "#.repeat(512/2-1)), head(br#"X"#)],
-                strings:     vec![  all(br#"X"#),         all(br#"X"#), all(br#"X"#)],
+            TestFindStrings {
+                input:       vec![ tail(br#"""#), chunk(br#" \"#,br#" \"#.repeat((512-2)/2)), head(br#""""#) ],
+                escapes:     vec![ tail(br#" "#), chunk(br#" X"#,br#" X"#.repeat((512-2)/2)), head(br#"  "#) ],
+                escaped:     vec![ tail(br#" "#), chunk(br#"  "#,br#"X "#.repeat((512-2)/2)), head(br#"X "#) ],
+                strings:     vec![ tail(br#"X"#), chunk(br#"XX"#,br#"XX"#.repeat((512-2)/2)), head(br#"X "#) ],
                 invalid_string_bytes: vec![],
-            })
+            }.test()
         }
         #[test]
         fn every_other_backslash_alternate_first_backslashed() {
-            With {
-                input:       vec![chunk(br#"""#,br#"\"#),  all(br#" \"#)] }.expect(FindStrings {
-                backslashes: vec![chunk(br#" "#,br#"X"#),  all(br#" X"#)],
-                escaped:     vec![chunk(br#" "#,br#" "#),  all(br#"X "#), head(br#"X"#)],
-                strings:     vec![  all(br#"X"#),          all(br#"X"#), all(br#"X"#)],
+            TestFindStrings {
+                input:       vec![ tail(br#""\"#), chunk(br#" \"#,br#" \"#.repeat((512-2)/2)), head(br#""""#) ],
+                escapes:     vec![ tail(br#" X"#), chunk(br#" X"#,br#" X"#.repeat((512-2)/2)), head(br#"  "#) ],
+                escaped:     vec![ tail(br#"  "#), chunk(br#"X "#,br#"X "#.repeat((512-2)/2)), head(br#"X "#) ],
+                strings:     vec![ tail(br#"XX"#), chunk(br#"XX"#,br#"XX"#.repeat((512-2)/2)), head(br#"X "#) ],
                 invalid_string_bytes: vec![],
-            })
+            }.test()
         }
         #[test]
         fn every_other_2_backslash() {
-            With {
-                input:       vec![chunk(br#"""#,br#""#),  head(br#"\\ "#.repeat(512/3))] }.expect(FindStrings {
-                backslashes: vec![chunk(br#" "#,br#""#),  head(br#"XX "#.repeat(512/3))],
-                escaped:     vec![chunk(br#" "#,br#""#),  head(br#"   "#)],
-                strings:     vec![  all(br#"X"#),         all(br#"X"#)],
+            TestFindStrings {
+                input:       vec![ tail(br#"""#),  head(br#"\\ "#.concat(br#"\\ "#.repeat((512-4)/3)).concat(br#"""#)) ],
+                escapes:     vec![ tail(br#" "#),  head(br#"X  "#.concat(br#"X  "#.repeat((512-4)/3)).concat(br#" "#)) ],
+                escaped:     vec![ tail(br#" "#),  head(br#" X "#.concat(br#" X "#.repeat((512-4)/3)).concat(br#" "#)) ],
+                strings:     vec![ tail(br#"X"#),  head(br#"XXX"#.concat(br#"XXX"#.repeat((512-4)/3)).concat(br#" "#)) ],
                 invalid_string_bytes: vec![],
-            })
+            }.test()
         }
         #[test]
         fn every_other_2_backslash_first_backslashed() {
-            With {
-                input:       vec![chunk(br#"""#,br#"\"#),  head(br#"\\ "#.repeat(512/3))] }.expect(FindStrings {
-                backslashes: vec![chunk(br#" "#,br#"X"#),  head(br#"XX "#.repeat(512/3))],
-                escaped:     vec![chunk(br#" "#,br#" "#),  head(br#"  X"#)],
-                strings:     vec![  all(br#"X"#),         all(br#"X"#)],
+            TestFindStrings {
+                input:       vec![ tail(br#""\"#),  head(br#"\\ "#.concat(br#"\\ "#.repeat((512-4)/3)).concat(br#"""#)) ],
+                escapes:     vec![ tail(br#" X"#),  head(br#" X "#.concat(br#"X  "#.repeat((512-4)/3)).concat(br#" "#)) ],
+                escaped:     vec![ tail(br#"  "#),  head(br#"X X"#.concat(br#" X "#.repeat((512-4)/3)).concat(br#" "#)) ],
+                strings:     vec![ tail(br#"XX"#),  head(br#"XXX"#.concat(br#"XXX"#.repeat((512-4)/3)).concat(br#" "#)) ],
                 invalid_string_bytes: vec![],
-            })
+            }.test()
+        }
+        #[test]
+        fn every_other_2_backslash_alternate() {
+            TestFindStrings {
+                input:       vec![ tail(br#"""#),  head(br#" \\"#.concat(br#" \\"#.repeat((512-4)/3)).concat(br#"""#)) ],
+                escapes:     vec![ tail(br#" "#),  head(br#" X "#.concat(br#" X "#.repeat((512-4)/3)).concat(br#" "#)) ],
+                escaped:     vec![ tail(br#" "#),  head(br#"  X"#.concat(br#"  X"#.repeat((512-4)/3)).concat(br#" "#)) ],
+                strings:     vec![ tail(br#"X"#),  head(br#"XXX"#.concat(br#"XXX"#.repeat((512-4)/3)).concat(br#" "#)) ],
+                invalid_string_bytes: vec![],
+            }.test()
+        }
+        #[test]
+        fn every_other_2_backslash_alternate_first_backslashed() {
+            TestFindStrings {
+                input:       vec![ tail(br#""\"#),  head(br#" \\"#.concat(br#" \\"#.repeat((512-4)/3)).concat(br#"""#)) ],
+                escapes:     vec![ tail(br#" X"#),  head(br#" X "#.concat(br#" X "#.repeat((512-4)/3)).concat(br#" "#)) ],
+                escaped:     vec![ tail(br#"  "#),  head(br#"X X"#.concat(br#"  X"#.repeat((512-4)/3)).concat(br#" "#)) ],
+                strings:     vec![ tail(br#"XX"#),  head(br#"XXX"#.concat(br#"XXX"#.repeat((512-4)/3)).concat(br#" "#)) ],
+                invalid_string_bytes: vec![],
+            }.test()
         }
     }
 }

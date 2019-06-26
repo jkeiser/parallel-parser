@@ -1,6 +1,6 @@
 #![feature(const_fn)]
 #![feature(stdsimd)]
-#![feature(repeat_generic_slice)]
+#![allow(unstable_name_collisions)]
 
 pub mod maskable;
 pub mod streamable_bitmask;

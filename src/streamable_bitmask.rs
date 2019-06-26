@@ -89,11 +89,11 @@ pub trait StreamableBitmask: Sized
     fn all(self) -> bool;
     
     ///
-    /// The series_start of any series of 1's: flips on the bit *at* the beginning of a run of 1's.
+    /// The start of any series of 1's: flips on the bit *at* the beginning of a run of 1's.
     ///
-    /// e.g. series_start(01111010) = 01000010
+    /// e.g. starts_series(01111010) = 01000010
     /// 
-    fn series_start(self, overflow: &mut u8) -> Self {
+    fn starts_series(self, overflow: &mut u8) -> Self {
         let prev = self.prev(overflow);
         self & !prev
     }
@@ -101,9 +101,9 @@ pub trait StreamableBitmask: Sized
     ///
     /// The ends of any series of 1's: flips on the bit *after* any run of 1's.
     ///
-    /// e.g. after_series_end(01111010) = 00000101
+    /// e.g. follows_series(01111010) = 00000101
     /// 
-    fn after_series_end(self, overflow: &mut u8) -> Self {
+    fn follows_series(self, overflow: &mut u8) -> Self {
         let prev = self.prev(overflow);
         !self & prev
     }
@@ -158,15 +158,20 @@ pub trait StreamableBitmask: Sized
     /// backslash.after_odd_series(overflow)
     /// ```
     /// 
-    fn after_odd_series_end(self, overflow: &mut AfterOddSeriesOverflow) -> Self {
+    fn follows_odd_series(self, overflow: &mut AfterOddSeriesOverflow) -> Self {
         // NOTE: the overflow could be done more efficiently with an Option<bool> where None indicates no overflow, false indicates even overflow and true indicates odd overflow.
         // It could be done even MORE efficiently with a single bool ("was there odd overflow") as long as we're willing to sometimes mark the middle of the series as "the end of an odd run." (Could mask it back off, too.)
-        let series_start = self.series_start(&mut overflow.start_overflow);
-        let even_ends = (series_start & Self::EVEN_BITS).streaming_add(self, &mut overflow.even_overflow);
-        let odd_ends = (series_start & Self::ODD_BITS).streaming_add(self, &mut overflow.odd_overflow);
+        let starts_series = self.starts_series(&mut overflow.start_overflow);
+        let even_ends = (starts_series & Self::EVEN_BITS).streaming_add(self, &mut overflow.even_overflow);
+        let odd_ends = (starts_series & Self::ODD_BITS).streaming_add(self, &mut overflow.odd_overflow);
         let after_odd_series = (even_ends & Self::ODD_BITS) | (odd_ends & Self::EVEN_BITS);
         after_odd_series & !self
     }
+
+    fn series_not_starting_with(self, other: Self, overflow: &mut bool) -> Self {
+        self.streaming_add(other, overflow) & self
+    }
+
 
     ///
     /// Add an extra bit to any odd-length sequence, to even it out.
@@ -202,9 +207,9 @@ pub trait StreamableBitmask: Sized
     fn complete_even_series(self, overflow: &mut AfterOddSeriesOverflow) -> Self {
         // NOTE: the overflow could be done more efficiently with an Option<bool> where None indicates no overflow, false indicates even overflow and true indicates odd overflow.
         // It could be done even MORE efficiently with a single bool ("was there odd overflow") as long as we're willing to sometimes mark the middle of the series as "the end of an odd run." (Could mask it back off, too.)
-        let series_start = self.series_start(&mut overflow.start_overflow);
-        let even_ends = (series_start & Self::EVEN_BITS).streaming_add(self, &mut overflow.even_overflow);
-        let odd_ends = (series_start & Self::ODD_BITS).streaming_add(self, &mut overflow.odd_overflow);
+        let starts_series = self.starts_series(&mut overflow.start_overflow);
+        let even_ends = (starts_series & Self::EVEN_BITS).streaming_add(self, &mut overflow.even_overflow);
+        let odd_ends = (starts_series & Self::ODD_BITS).streaming_add(self, &mut overflow.odd_overflow);
         let after_odd_series = (even_ends & Self::ODD_BITS) | (odd_ends & Self::EVEN_BITS);
         after_odd_series
     }
@@ -500,56 +505,56 @@ mod tests {
         test_prev_3(b"       X   X X    X X X  X X X X X    X X  X X    X X   X   X X X   X    X  X  X    X    X    X_ X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X  X X X X");
     }
     #[test]
-    fn series_start() {
+    fn starts_series() {
         let input    = b"XXXX   X X  XXX X XXXXX XXXXXXXXX XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX XXXXXXXXXX          XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX XXXXX X";
         let expected = b"X      X X  X   X X     X         X                                                                                         X                   X                                                                                                                                                                                                                              X     X";
-        let actual: Vec<u64> = chunks64(input).scan(Default::default(), |overflow, input| Some(input.where_eq(b'X').series_start(overflow))).collect();
+        let actual: Vec<u64> = chunks64(input).scan(Default::default(), |overflow, input| Some(input.where_eq(b'X').starts_series(overflow))).collect();
         let expected: Vec<u64> = chunks64(expected).map(|input| input.where_eq(b'X')).collect();
         assert_eq!(actual, expected);
         let input    = b"                                                                XXXX";
         let expected = b"                                                                X   ";
-        let actual: Vec<u64> = chunks64(input).scan(Default::default(), |overflow, input| Some(input.where_eq(b'X').series_start(overflow))).collect();
+        let actual: Vec<u64> = chunks64(input).scan(Default::default(), |overflow, input| Some(input.where_eq(b'X').starts_series(overflow))).collect();
         let expected: Vec<u64> = chunks64(expected).map(|input| input.where_eq(b'X')).collect();
         assert_eq!(actual, expected);
     }
     #[test]
-    fn after_series_end() {
+    fn follows_series() {
         let input    = b"X ";
         let expected = b" X";
-        let actual: Vec<u64> = chunks64(input).scan(Default::default(), |overflow, input| Some(input.where_eq(b'X').after_series_end(overflow))).collect();
+        let actual: Vec<u64> = chunks64(input).scan(Default::default(), |overflow, input| Some(input.where_eq(b'X').follows_series(overflow))).collect();
         let expected: Vec<u64> = chunks64(expected).map(|input| input.where_eq(b'X')).collect();
         assert_eq!(actual, expected);
         let input    = b"XXXX   X X  XXX X XXXXX XXXXXXXXX XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX XXXXXXXXXX          XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX XXXXX X";
         let expected = b"    X   X X    X X     X         X                                                                                         X          X                                                                                                                                                                                                                                       X     X X";
-        let actual: Vec<u64> = chunks64(input).scan(Default::default(), |overflow, input| Some(input.where_eq(b'X').after_series_end(overflow))).collect();
+        let actual: Vec<u64> = chunks64(input).scan(Default::default(), |overflow, input| Some(input.where_eq(b'X').follows_series(overflow))).collect();
         let expected: Vec<u64> = chunks64(expected).map(|input| input.where_eq(b'X')).collect();
         assert_eq!(actual, expected);
         let input    = b"                                                                XXXX";
         let expected = b"                                                                    X";
-        let actual: Vec<u64> = chunks64(input).scan(Default::default(), |overflow, input| Some(input.where_eq(b'X').after_series_end(overflow))).collect();
+        let actual: Vec<u64> = chunks64(input).scan(Default::default(), |overflow, input| Some(input.where_eq(b'X').follows_series(overflow))).collect();
         let expected: Vec<u64> = chunks64(expected).map(|input| input.where_eq(b'X')).collect();
         assert_eq!(actual, expected);
     }
     #[test]
-    fn after_odd_series_end() {
+    fn follows_odd_series() {
         let input    = b"X ";
         let expected = b" X";
-        let actual: Vec<u64> = chunks64(input).scan(Default::default(), |overflow, input| Some(input.where_eq(b'X').after_odd_series_end(overflow))).collect();
+        let actual: Vec<u64> = chunks64(input).scan(Default::default(), |overflow, input| Some(input.where_eq(b'X').follows_odd_series(overflow))).collect();
         let expected: Vec<u64> = chunks64(expected).map(|input| input.where_eq(b'X')).collect();
         assert_eq!(actual, expected);
         // let input    = b"XX ";
         // let expected = b"   ";
-        // let actual: Vec<u64> = chunks64(input).scan(Default::default(), |overflow, input| Some(input.where_eq(b'X').after_odd_series_end(overflow))).collect();
+        // let actual: Vec<u64> = chunks64(input).scan(Default::default(), |overflow, input| Some(input.where_eq(b'X').follows_odd_series(overflow))).collect();
         // let expected: Vec<u64> = chunks64(expected).map(|input| input.where_eq(b'X')).collect();
         // assert_eq!(actual, expected);
         // let input    = b"XXXX   X X  XXX X XXXXX XXXXXXXXX XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX XXXXXXXXXX          XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX XXXXX X";
         // let expected = b"        X X    X X     X                                                                                                   X          X                                                                                                                                                                                                                                             X X";
-        // let actual: Vec<u64> = chunks64(input).scan(Default::default(), |overflow, input| Some(input.where_eq(b'X').after_odd_series_end(overflow))).collect();
+        // let actual: Vec<u64> = chunks64(input).scan(Default::default(), |overflow, input| Some(input.where_eq(b'X').follows_odd_series(overflow))).collect();
         // let expected: Vec<u64> = chunks64(expected).map(|input| input.where_eq(b'X')).collect();
         // assert_eq!(actual, expected);
         // let input    = b"                                                                XXXX";
         // let expected = b"                                                                    ";
-        // let actual: Vec<u64> = chunks64(input).scan(Default::default(), |overflow, input| Some(input.where_eq(b'X').after_odd_series_end(overflow))).collect();
+        // let actual: Vec<u64> = chunks64(input).scan(Default::default(), |overflow, input| Some(input.where_eq(b'X').follows_odd_series(overflow))).collect();
         // let expected: Vec<u64> = chunks64(expected).map(|input| input.where_eq(b'X')).collect();
         // assert_eq!(actual, expected);
     }
