@@ -1,5 +1,7 @@
-pub use super::*;
-pub use super::find_strings::*;
+pub use packed_simd::*;
+pub use crate::separated_bits::*;
+pub use crate::streamable_bitmask::*;
+pub use crate::parser::*;
 pub use crate::maskable::*;
 use std::fmt::Debug;
 
@@ -7,9 +9,6 @@ const SPACES: [u8;512] = [b' ';512];
 
 fn from_x_str(input: &[u8;512]) -> u64x8 {
     separate_bits(input).where_eq(b'X')
-}
-fn into_x_str<T: StreamableBitmask>(mask: T) -> String {
-    iter_bits(mask).map(|bit| if bit { 'X' } else { ' ' }).fold(String::with_capacity(T::NUM_BITS as usize), |mut s,bit| { s.push(bit); s })
 }
 fn assert_bitmasks_eq(actual: u64x8, expected: u64x8, name: &str, input: &[u8;512], chunk_num: usize) {
     assert_eq!(actual, expected, "{} in chunk {} didn't match!\n{:10}: {}\n{:10}: {}\n{:10}: {}", name, chunk_num, "actual", into_x_str(actual), "expected", into_x_str(expected), "input", String::from_utf8_lossy(input));
@@ -89,8 +88,11 @@ mod find_strings {
         invalid_string_bytes: Vec<[u8;512]>,
     }
     impl TestFindStrings {
-        fn test(&self) {
+        fn test(&mut self) {
             let num_chunks = self.input.len().max(self.strings.len()).max(self.escapes.len()).max(self.escaped.len()).max(self.invalid_string_bytes.len());
+            while self.input.len() < num_chunks {
+                self.input.push(SPACES.clone());
+            }
             let expected = (0..num_chunks).map(|i| {
                 let strings = from_x_str(self.strings.get(i).unwrap_or(&SPACES));
                 let escapes = from_x_str(self.escapes.get(i).unwrap_or(&SPACES));
@@ -98,12 +100,12 @@ mod find_strings {
                 let invalid_string_bytes = from_x_str(self.invalid_string_bytes.get(i).unwrap_or(&SPACES));
                 FindStrings { strings, escapes, escaped, invalid_string_bytes }
             });
-            let iter_input = || (0..num_chunks).map(|i| self.input.get(i).unwrap_or(&SPACES));
-            let actual = iter_input().scan(Default::default(), |overflow,input| {
+            let parser = JsonParser::from_chunks(self.input.clone());
+            let actual = self.input.iter().scan(parser, |parser,input| {
                 println!("{:10}: {}", "input", String::from_utf8_lossy(input));
-                Some(find_strings(overflow, &separate_bits(input)))
+                Some(parser.find_strings(&separate_bits(input)))
             });
-            for (i, ((input, actual), expected)) in iter_input().zip(actual).zip(expected).enumerate() {
+            for (i, ((input, actual), expected)) in self.input.iter().zip(actual).zip(expected).enumerate() {
                 assert_bitmasks_eq(actual.strings, expected.strings, "strings", &input, i);
                 assert_bitmasks_eq(actual.escapes, expected.escapes, "escapes", &input, i);
                 assert_bitmasks_eq(actual.escaped, expected.escaped, "escaped", &input, i);

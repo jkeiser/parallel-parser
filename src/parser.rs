@@ -1,11 +1,7 @@
-mod find_strings;
-#[cfg(test)]
-mod tests;
-
 use packed_simd::*;
 use crate::streamable_bitmask::*;
 use crate::separated_bits::*;
-use find_strings::*;
+use crate::maskable::*;
 
 pub struct JsonParser {
     result: JsonResult,
@@ -17,6 +13,8 @@ pub struct JsonParser {
 pub struct JsonResult {
     /// The buffers (we modify strings and numbers in place). This can be stripped away
     modified_json: Vec<[u8;512]>,
+    // /// Errors that occurred during parsing
+    // errors: Vec<JsonParseError>,
     // /// The index of every line start, for error reporting
     // line_starts: Vec<usize>,
     // /// Strings, numbers, booleans, and nulls, in order
@@ -39,23 +37,25 @@ pub enum AtomicValueType {
 // pub fn parse(read: Read) -> JsonResult {
 
 // }
-pub fn parse_chunks(input: impl Iterator<Item=[u8;512]>) -> JsonResult {
-    let parser = JsonParser {
-        result: JsonResult {
-            modified_json: input.collect(),
-            // line_starts: Default::default(),
-            // atomic_values: Default::default(),
-            // atomic_value_indices: Default::default(),
-            // atomic_value_lengths: Default::default(),
-        },
-        validate_utf8_overflow: Default::default(),
-        find_strings_overflow: Default::default(),
-        find_literal_names_overflow: Default::default(),
-    };
-    parser.parse_existing_chunks()
+pub fn parse_chunks(input: Vec<[u8;512]>) -> JsonResult {
+    JsonParser::from_chunks(input).parse_existing_chunks()
 }
 
 impl JsonParser {
+    pub(crate) fn from_chunks(input: Vec<[u8;512]>) -> Self {
+        JsonParser {
+            result: JsonResult {
+                modified_json: input,
+                // line_starts: Default::default(),
+                // atomic_values: Default::default(),
+                // atomic_value_indices: Default::default(),
+                // atomic_value_lengths: Default::default(),
+            },
+            validate_utf8_overflow: Default::default(),
+            find_strings_overflow: Default::default(),
+            find_literal_names_overflow: Default::default(),
+        }
+    }
     fn parse_existing_chunks(mut self) -> JsonResult {
         for i in 0..self.result.modified_json.len() {
             self.parse_existing_chunk(i);
@@ -70,12 +70,130 @@ impl JsonParser {
     /// 
     fn parse_existing_chunk(&mut self, chunk: usize) -> ParsedChunk {
         let bits = separate_bits(&self.result.modified_json[chunk]);
+        println!("{:10}: {}", "bit0", into_x_str(bits[0]));
+        println!("{:10}: {}", "bit1", into_x_str(bits[1]));
+        println!("{:10}: {}", "bit2", into_x_str(bits[2]));
+        println!("{:10}: {}", "bit3", into_x_str(bits[3]));
+        println!("{:10}: {}", "bit4", into_x_str(bits[4]));
+        println!("{:10}: {}", "bit5", into_x_str(bits[5]));
+        println!("{:10}: {}", "bit6", into_x_str(bits[6]));
+        println!("{:10}: {}", "bit7", into_x_str(bits[7]));
         let invalid_utf8 = validate_utf8(&mut self.validate_utf8_overflow, &bits);
-        let FindStrings { strings, escapes, escaped, invalid_string_bytes } = find_strings(&mut self.find_strings_overflow, &bits);
+        let FindStrings { strings, escapes, escaped, invalid_string_bytes } = self.find_strings(&bits);
         let FindLiteralNames { true_literal, false_literal, null_literal, literal_name, prev_not_literal_name } = find_literal_names(&mut self.find_literal_names_overflow, &bits);
 
         ParsedChunk { escapes, escaped, strings, invalid_utf8, invalid_string_bytes, true_literal, false_literal, null_literal, literal_name, prev_not_literal_name }
     }
+
+    fn find_escapes(&mut self, input: &SeparatedBits) -> (u64x8, u64x8) {
+        //
+        // Find backslashed characters (including quotes).
+        //
+        // First, find series of backslashes that start on an even boundaries.
+        //
+        let backslash = input.where_eq(b'\\');
+        println!("{:10}: {}", "backslash", into_x_str(backslash));
+        let starts_backslash_series = backslash.starts_series(&mut self.find_strings_overflow.starts_backslash_series);
+        let backslash_series_starting_on_odd_boundary = backslash.series_not_starting_with(starts_backslash_series & u64x8::EVEN_BITS, &mut self.find_strings_overflow.backslash_series_starting_on_odd_boundary);
+
+        // Next, turn series of backslashes on even boundaries into 10101010 using XOR,
+        // and series on odd boundaries the same way, to get the backslashes that actually escape
+        // something.
+        let escapes = (u64x8::ODD_BITS & backslash_series_starting_on_odd_boundary) |
+                    (u64x8::EVEN_BITS & backslash & !backslash_series_starting_on_odd_boundary);
+        // The escaped characters are the characters right after a "real" escaping backslash.
+        let escaped = escapes.prev(&mut self.find_strings_overflow.escaped);
+        println!("{:10}: {}", "escapes", into_x_str(escapes));
+        println!("{:10}: {}", "escaped", into_x_str(escaped));
+        (escapes, escaped)
+    }
+
+    ///
+    /// Find strings and string parts.
+    /// 
+    pub(crate) fn find_strings(&mut self, input: &SeparatedBits) -> FindStrings {
+        //
+        // Exit early if there are no quotes.
+        //
+        // BRANCH NOTE: Strings are so frequent that almost all chunks in all files will have them; the
+        // only files that won't, pretty much, are tiny empty JSON. In those few cases, avoiding the
+        // CMUL is worth the misprediction, because in use cases where they *do* happen they are
+        // likely to happen with enough frequency to matter. TODO find the % where matters.
+        //
+        // Invalid backslashes can still occur, but those will be detected in the "unexpected character"
+        // catchall that looks for non-whitespace outside of strings, numbers, literals and structure.
+        //
+        let quote = input.where_eq(b'"');
+        println!("{:10}: {}", "quotes", into_x_str(quote));
+        if !quote.any() && !self.find_strings_overflow.strings {
+            return Default::default();
+        }
+
+        // Figure out which characters are escaped
+        let (escapes, escaped) = self.find_escapes(input);
+
+        // Find characters in strings (every other ", not counting \").
+        let strings = (quote & !escaped).between_pairs(&mut self.find_strings_overflow.strings);
+
+        // Check for invalid string characters (00-1F).
+        let invalid_string_bytes = input.where_lt(0x20) & strings; // 00-1F
+
+        // TODO ensure we don't *end* the stream in a string.
+
+        // // Find Unicode escapes (\uDDDD ranges)
+        // let escaped_u = each_64(input, |i| i.where_eq(b'u'));
+        // // BRANCH NOTE: this is rare enough to be worth skipping when we can
+        // let (escaped_unicode_hex, invalid_escaped_unicode_hex) = if escaped_u.any() {
+        //     // Best time to validate the digits is during copy.
+        //     // TODO make sure that "\u","D" doesn't break the world
+        //     let invalid_escaped_unicode_hex = escaped_unicode_hex & !hex_digit;
+        //     (escaped_unicode_hex, invalid_escaped_unicode_hex)
+        // }
+
+        println!("{:10}: {}", "strings", into_x_str(strings));
+
+        FindStrings { strings, escapes, escaped, invalid_string_bytes }
+    }
+}
+
+#[derive(Clone,Debug,Default)]
+pub struct FindStrings {
+    ///
+    /// Location of all string characters.
+    /// 
+    /// Includes the open quote of each string, but not the close quote.
+    /// 
+    pub strings: u64x8,
+    ///
+    /// Locations of all escaping backslashes.
+    /// 
+    pub escapes: u64x8,
+    ///
+    /// The locations of escaped characters (the n \n or \\\n).
+    /// 
+    /// Correctly detects even #'s of escapes, so the n in \\n will not be escaped.
+    /// 
+    pub escaped: u64x8,
+    ///
+    /// Location of invalid bytes inside a string.
+    /// 
+    pub invalid_string_bytes: u64x8,
+    // ///
+    // /// Location of escaped unicode hex (\u12BE)
+    // /// 
+    // pub escaped_unicode_hex: u64
+}
+
+#[derive(Clone,Debug,Default)]
+pub struct FindStringsOverflow {
+    starts_backslash_series: u8,
+    escaped: u8,
+    backslash_series_starting_on_odd_boundary: bool,
+    strings: bool,
+    // escaped_unicode_hex_1: u8,
+    // escaped_unicode_hex_2: u8,
+    // escaped_unicode_hex_3: u8,
+    // escaped_unicode_hex_4: u8,
 }
 
 #[derive(Clone,Debug,Default)]
@@ -339,20 +457,10 @@ pub fn validate_utf8(overflow: &mut ValidateUtf8Overflow, input: &SeparatedBits)
     invalid
 }
 
-
-// fn each_64<F: Fn(u8x64) -> u64>(input: &[u8;512], f: F) -> u64x8{
-//     let mut result = u64x8::splat(0);
-//     for i in 0..8 {
-//         let start = i*64;
-//         let input64 = u8x64::from_le(unsafe { u8x64::from_slice_unaligned_unchecked(&input[start..start+64]) });
-//         result = result.replace(i, f(input64));
-//     }
-//     result
-// }
-
-fn iter_bits<'a, T: StreamableBitmask+'a>(mask: T) -> impl Iterator<Item=bool>+'a {
+// Stuff to help with debug prints and tests
+pub(crate) fn iter_bits<'a, T: StreamableBitmask+'a>(mask: T) -> impl Iterator<Item=bool>+'a {
     (0..T::NUM_BITS).map(move |n| mask.get_bit(n))
 }
-fn into_x_str<T: StreamableBitmask>(mask: T) -> String {
+pub(crate) fn into_x_str<T: StreamableBitmask>(mask: T) -> String {
     iter_bits(mask).map(|bit| if bit { 'X' } else { ' ' }).fold(String::with_capacity(T::NUM_BITS as usize), |mut s,bit| { s.push(bit); s })
 }

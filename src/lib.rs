@@ -10,3 +10,5 @@ mod carryless_mul;
 pub mod parser;
 //mod simd_traits;
 //mod simd_int;
+#[cfg(test)]
+mod tests;
