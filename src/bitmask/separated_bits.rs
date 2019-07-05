@@ -1,8 +1,9 @@
-use crate::maskable::*;
-use crate::streamable_bitmask::*;
+use super::maskable::*;
+use super::streamable_bitmask::*;
 use packed_simd::*;
-use std::ops::{Bound,Index,RangeBounds,RangeInclusive};
+use std::ops::{Bound,Index,IndexMut,RangeBounds,RangeInclusive};
 
+#[derive(Debug,Default)]
 pub struct SeparatedBits([u64x8;8]);
 
 fn to_inclusive_range(range: &impl RangeBounds<u8>) -> RangeInclusive<u8> {
@@ -21,6 +22,7 @@ fn to_inclusive_range(range: &impl RangeBounds<u8>) -> RangeInclusive<u8> {
 }
 
 pub fn separate_bits(bytes: &[u8;512]) -> SeparatedBits {
+    // TODO it takes 64 operations to turn the bits into separate masks. There MUST be a better way.
     let segments = [
         u8x64::from_slice_unaligned(&bytes[64*0..64*1]),
         u8x64::from_slice_unaligned(&bytes[64*1..64*2]),
@@ -233,5 +235,11 @@ impl Index<usize> for SeparatedBits {
     type Output = u64x8;
     fn index(&self, index: usize) -> &Self::Output {
         &self.0[index]
+    }
+}
+
+impl IndexMut<usize> for SeparatedBits {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        &mut self.0[index]
     }
 }

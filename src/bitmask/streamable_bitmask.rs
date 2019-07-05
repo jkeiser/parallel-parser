@@ -1,4 +1,4 @@
-use crate::carryless_mul::*;
+use super::carryless_mul::*;
 use packed_simd::*;
 use std::ops::{BitAnd,BitOr,BitXor,Not,BitAndAssign,BitOrAssign,BitXorAssign};
 use std::fmt::Debug;
@@ -14,7 +14,8 @@ pub trait StreamableBitmask: Sized
     const NO_BITS: Self;
     const EVEN_BITS: Self;
     const ODD_BITS: Self;
-    const TOP_BIT: Self;
+    const LAST_BIT: Self;
+    const FIRST_BIT: Self;
 
     fn streaming_shift_forward(self, count: u32, overflow: &mut u8, overflow_count: u32) -> Self;
     fn streaming_add(self, other: Self, overflow: &mut bool) -> Self;
@@ -29,8 +30,11 @@ pub trait StreamableBitmask: Sized
     /// 
     /// e.g. prev(01111010) = 00111101...
     /// 
-    fn prev(self, overflow: &mut u8) -> Self {
-        self.streaming_shift_forward(1, overflow, 1)
+    fn prev(self, overflow: &mut bool) -> Self {
+        let mut u8_overflow = *overflow as u8;
+        let result = self.streaming_shift_forward(1, &mut u8_overflow, 1);
+        *overflow = u8_overflow > 0;
+        result
     }
 
     ///
@@ -87,13 +91,21 @@ pub trait StreamableBitmask: Sized
     /// Returns true if any bits are set, false otherwise.
     ///
     fn all(self) -> bool;
+
+    ///
+    /// Return this mask with the given bits replaced.
+    /// 
+    #[must_use]
+    fn replace_where(self, where_mask: Self, replace_with: Self) -> Self {
+        (self & !where_mask) | (replace_with & where_mask)
+    }
     
     ///
     /// The start of any series of 1's: flips on the bit *at* the beginning of a run of 1's.
     ///
     /// e.g. starts_series(01111010) = 01000010
     /// 
-    fn starts_series(self, overflow: &mut u8) -> Self {
+    fn starts_series(self, overflow: &mut bool) -> Self {
         let prev = self.prev(overflow);
         self & !prev
     }
@@ -103,7 +115,7 @@ pub trait StreamableBitmask: Sized
     ///
     /// e.g. follows_series(01111010) = 00000101
     /// 
-    fn follows_series(self, overflow: &mut u8) -> Self {
+    fn follows_series(self, overflow: &mut bool) -> Self {
         let prev = self.prev(overflow);
         !self & prev
     }
@@ -159,13 +171,7 @@ pub trait StreamableBitmask: Sized
     /// ```
     /// 
     fn follows_odd_series(self, overflow: &mut AfterOddSeriesOverflow) -> Self {
-        // NOTE: the overflow could be done more efficiently with an Option<bool> where None indicates no overflow, false indicates even overflow and true indicates odd overflow.
-        // It could be done even MORE efficiently with a single bool ("was there odd overflow") as long as we're willing to sometimes mark the middle of the series as "the end of an odd run." (Could mask it back off, too.)
-        let starts_series = self.starts_series(&mut overflow.start_overflow);
-        let even_ends = (starts_series & Self::EVEN_BITS).streaming_add(self, &mut overflow.even_overflow);
-        let odd_ends = (starts_series & Self::ODD_BITS).streaming_add(self, &mut overflow.odd_overflow);
-        let after_odd_series = (even_ends & Self::ODD_BITS) | (odd_ends & Self::EVEN_BITS);
-        after_odd_series & !self
+        self.complete_even_series(overflow) & !self
     }
 
     fn series_not_starting_with(self, other: Self, overflow: &mut bool) -> Self {
@@ -235,7 +241,7 @@ pub fn each_bit<'a, T: StreamableBitmask+'a>(mask: T) -> impl Iterator<Item=bool
 
 #[derive(Copy,Clone,Debug,Default)]
 pub struct AfterOddSeriesOverflow {
-    pub(crate) start_overflow: u8,
+    pub(crate) start_overflow: bool,
     pub(crate) odd_overflow: bool,
     pub(crate) even_overflow: bool
 }
@@ -246,7 +252,8 @@ impl StreamableBitmask for u64x8 {
     const ALL_BITS: Self = Self::splat(u64::ALL_BITS);
     const EVEN_BITS: Self = Self::splat(u64::EVEN_BITS);
     const ODD_BITS: Self = Self::splat(u64::ODD_BITS);
-    const TOP_BIT: Self = u64x8::new(u64::TOP_BIT, 0, 0, 0, 0, 0, 0, 0);
+    const LAST_BIT: Self = u64x8::new(u64::LAST_BIT, 0, 0, 0, 0, 0, 0, 0);
+    const FIRST_BIT: Self = u64x8::new(0, 0, 0, 0, 0, 0, 0, u64::FIRST_BIT);
 
     fn streaming_shift_forward(self, count: u32, overflow: &mut u8, overflow_count: u32) -> Self {
         assert!(count < u64x8::lanes() as u32*64);
@@ -332,7 +339,8 @@ impl StreamableBitmask for u64 {
     const ALL_BITS: Self = !Self::NO_BITS;
     const EVEN_BITS: Self = 0x5555555555555555;
     const ODD_BITS: Self = Self::EVEN_BITS << 1;
-    const TOP_BIT: Self = 1 << (64 - 1);
+    const LAST_BIT: Self = 1 << (64 - 1);
+    const FIRST_BIT: Self = 1;
 
     fn streaming_shift_forward(self, count: u32, overflow: &mut u8, overflow_count: u32) -> Self {
         assert!(overflow_count <= 8);
@@ -348,7 +356,7 @@ impl StreamableBitmask for u64 {
     }
     fn between_pairs(self, overflow: &mut bool) -> Self {
         let result = self.clmul(u64::ALL_BITS).extract(0) ^ (u64::ALL_BITS * (*overflow as u64));
-        *overflow = (result & u64::TOP_BIT) > 0;
+        *overflow = (result & u64::LAST_BIT) > 0;
         result
     }
     fn from_overflow(overflow: u8) -> Self {
@@ -368,10 +376,26 @@ impl StreamableBitmask for u64 {
     }
 }
 
+// Stuff to help with debug prints and tests
+pub(crate) fn iter_bits<'a, T: StreamableBitmask+'a>(mask: T) -> impl Iterator<Item=bool>+'a {
+    (0..T::NUM_BITS).map(move |n| mask.get_bit(n))
+}
+pub(crate) fn into_x_str<T: StreamableBitmask>(mask: T) -> String {
+    iter_bits(mask).map(|bit| if bit { 'X' } else { ' ' }).fold(String::with_capacity(T::NUM_BITS as usize), |mut s,bit| { s.push(bit); s })
+}
+#[cfg(test)]
+pub(crate) fn into_x_slice(mask: u64x8) -> [u8;512] {
+    let mut result = [b' ';512];
+    for n in 0..512 {
+        if mask.get_bit(n as u32) { result[n] = b'X'; }
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::maskable::*;
+    use crate::bitmask::maskable::*;
 
     fn str_from_mask<T: StreamableBitmask>(mask: T) -> String {
         String::from_utf8(each_bit(mask).map(|bit| if bit { b'X' } else { b' ' }).collect()).unwrap()

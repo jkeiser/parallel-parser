@@ -7,8 +7,11 @@ edition = "2018"
 [dependencies]
 packed_simd = { version = "*", features = [ "into_bits" ] }
 num = "*"
+strum = "*"
+strum_macros = "*"
 
 [dev-dependencies]
+pretty_assertions = "*"
 criterion = "0.2"
 
 [[bench]]

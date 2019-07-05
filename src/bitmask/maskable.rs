@@ -1,4 +1,4 @@
-use crate::streamable_bitmask::*;
+use super::streamable_bitmask::*;
 use packed_simd::*;
 use std::ops::{Bound,RangeBounds};
 
