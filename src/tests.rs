@@ -85,84 +85,6 @@ mod find_strings {
     use pretty_assertions::assert_eq;
     use super::*;
 
-    struct TestJsonStringParserOld {
-        input: Vec<[u8;512]>,
-        in_string: Vec<[u8;512]>,
-        escapes: Vec<[u8;512]>,
-        escaped: Vec<[u8;512]>,
-    }
-    impl TestJsonStringParserOld {
-        fn test(mut self) {
-            let num_chunks = self.input.len().max(self.in_string.len()).max(self.escapes.len()).max(self.escaped.len());
-            while self.input.len() < num_chunks { self.input.push(SPACES.clone()); }
-            while self.in_string.len() < num_chunks { self.in_string.push(SPACES.clone()); }
-            while self.escapes.len() < num_chunks { self.escapes.push(SPACES.clone()); }
-            while self.escaped.len() < num_chunks { self.escaped.push(SPACES.clone()); }
-            let in_string: Vec<u64x8> = self.in_string.iter().map(|mask| from_x_str(mask)).collect();
-            let escapes: Vec<u64x8> = self.escapes.iter().map(|mask| from_x_str(mask)).collect();
-            let value: Vec<[u8;512]> = in_string.iter().scan(false, |overflow, &in_string| Some(in_string | in_string.prev(overflow))).map(into_x_slice).collect();
-            let keep: Vec<[u8;512]> = in_string.iter().zip(escapes.iter()).scan(false, |overflow, (&in_string, &escapes)| Some(in_string & in_string.prev(overflow) & !escapes)).map(into_x_slice).collect();
-            TestJsonStringParserOld2 {
-                input: self.input,
-                value,
-                keep,
-                errors: HashMap::default(),
-            }.test()
-        }
-    }
-
-    struct TestJsonStringParserOld2 {
-        input: Vec<[u8;512]>,
-        value: Vec<[u8;512]>,
-        keep: Vec<[u8;512]>,
-        errors: HashMap<JsonErrorKind, Vec<[u8;512]>>,
-    }
-    impl TestJsonStringParserOld2 {
-        fn test(mut self) {
-            // Extend all expected/actual values with spaces as necessary to be the same length
-            let num_chunks = self.input.len().max(self.value.len()).max(self.keep.len()).max(self.errors.values().map(|e| e.len()).max().unwrap_or(0));
-            while self.input.len() < num_chunks { self.input.push(SPACES.clone()); }
-            while self.value.len() < num_chunks { self.value.push(SPACES.clone()); }
-            while self.keep.len() < num_chunks { self.keep.push(SPACES.clone()); }
-            for masks in self.errors.values_mut() {
-                while masks.len() < num_chunks { masks.push(SPACES.clone()); }
-            }
-
-            for value in &self.value {
-                println!("value    : {}", String::from_utf8_lossy(value));
-            }
-            for keep in &self.keep {
-                println!("keep     : {}", String::from_utf8_lossy(keep));
-            }
-
-            // Figure out the actual strings
-            let mut strings: Vec<String> = vec![];
-            let mut current_string = None;
-            for chunk_index in 0..num_chunks {
-                for i in 0..512 {
-                    assert!(self.value[chunk_index][i] == b'X' || self.keep[chunk_index][i] != b'X');
-                    if self.value[chunk_index][i] == b'X' {
-                        let mut vec = current_string.unwrap_or_else(|| Vec::new());
-                        if self.keep[chunk_index][i] == b'X' {
-                            vec.push(self.input[chunk_index][i]);
-                        }
-                        current_string = Some(vec);
-                    } else if let Some(vec) = current_string {
-                        strings.push(String::from_utf8(vec).unwrap().into());
-                        current_string = None;
-                    }
-                }
-            }
-            if let Some(vec) = current_string {
-                strings.push(String::from_utf8(vec).unwrap().into());
-            }
-            TestJsonStringParser {
-                input: self.input,
-                strings,
-                errors: self.errors,
-            }.test()
-        }
-    }
     struct TestJsonStrings<T: PartialEq<String>+Debug> {
         input: Vec<[u8;512]>,
         strings: Vec<T>,
@@ -243,9 +165,16 @@ mod find_strings {
 
     #[test]
     fn no_strings() {
-        TestJsonStrings::<String> {
-            input:                vec![ all(br#" "#), all(br#" "#) ],
-            strings:              vec![ ],
+        TestJsonStrings::<&str> {
+            input:   vec![ all(br#" "#), all(br#" "#) ],
+            strings: vec![ ],
+        }.test()
+    }
+    #[test]
+    fn empty_string() {
+        TestJsonStrings {
+            input:   vec![ head(br#""""#) ],
+            strings: vec![ "" ],
         }.test()
     }
     // This yields a somewhat unexpected result, simply because it is invalid JSON (under normal circumstances,
@@ -258,94 +187,82 @@ mod find_strings {
     //     }.test()
     // }
     #[test]
-    fn many_strings() {
-        TestJsonStringParserOld2 {
-            input:                vec![ head((0..100).fold(Vec::<u8>::new(), |mut v, n| { if v.len() + n + 2 < 512 { v.push(b'"'); v.append(&mut b" ".repeat(n)); v.push(b'"'); }; v })) ],
-            value:                vec![ head((0..100).fold(Vec::<u8>::new(), |mut v, n| { if v.len() + n + 2 < 512 { v.push(b'X'); v.append(&mut b"X".repeat(n)); v.push(b'X'); }; v })) ],
-            keep:                 vec![ head((0..100).fold(Vec::<u8>::new(), |mut v, n| { if v.len() + n + 2 < 512 { v.push(b' '); v.append(&mut b"X".repeat(n)); v.push(b' '); }; v })) ],
-            errors:               HashMap::default(),
+    fn all_empty_strings_with_commas() {
+        TestJsonStrings {
+            input:   vec![ head(br#""","#.repeat(510/3).concat(br#""""#)), head(br#","#.concat(br#""","#.repeat(510/3))) ],
+            strings: [""].repeat((510/3)+1+(510/3)),
         }.test()
     }
+    // This yields a somewhat unexpected result, simply because it is invalid JSON (under normal circumstances,
+    // two actual strings cannot be right next to each other without a comma or : between them).
+    // #[test]
+    // fn many_strings() {
+    //     TestJsonStrings {
+    //         input:   vec![ *br#"""" ""  ""   ""    ""     ""      ""       ""         ""          ""           ""            ""             ""              ""               ""                ""                 ""                  ""                   ""                    ""                     ""                       ""                       ""                        ""                         ""                          ""                           ""                            ""                             ""                        ""# ],
+    //         strings: vec![      ""   ],
+    //     }.test()
+    // }
     #[test]
     fn many_strings_with_commas() {
-        TestJsonStringParserOld2 {
-            input:                vec![ head((0..100).fold(Vec::<u8>::new(), |mut v, n| { if v.len() + n + 3 < 512 { v.push(b'"'); v.append(&mut b" ".repeat(n)); v.push(b'"'); v.push(b',')}; v })) ],
-            value:                vec![ head((0..100).fold(Vec::<u8>::new(), |mut v, n| { if v.len() + n + 3 < 512 { v.push(b'X'); v.append(&mut b"X".repeat(n)); v.push(b'X'); v.push(b' ')}; v })) ],
-            keep:                 vec![ head((0..100).fold(Vec::<u8>::new(), |mut v, n| { if v.len() + n + 3 < 512 { v.push(b' '); v.append(&mut b"X".repeat(n)); v.push(b' '); v.push(b' ')}; v })) ],
-            errors:               HashMap::default(),
+        TestJsonStrings {
+            input:   vec![ *br#"""," ","  ","   ","    ","     ","      ","       ","         ","          ","           ","            ","             ","              ","               ","                ","                 ","                  ","                   ","                    ","                     ","                       ","                       ","                        ","                         ","                          ","                           ","                            ","                           ""# ],
+            strings: vec![      ""," ","  ","   ","    ","     ","      ","       ","         ","          ","           ","            ","             ","              ","               ","                ","                 ","                  ","                   ","                    ","                     ","                       ","                       ","                        ","                         ","                          ","                           ","                            ","                           "   ],
         }.test()
     }
     #[test]
     fn one_string_510() {
-        TestJsonStringParserOld {
-            input:                vec![ head(br#"""#.concat(br#"X"#.repeat(510)).concat(br#"""#)) ],
-            in_string:            vec![ head(br#"X"#.concat(br#"X"#.repeat(510)).concat(br#" "#)) ],
-            escapes:              vec![ ],
-            escaped:              vec![ ],
+        TestJsonStrings {
+            input:   vec![ head(br#"""#.concat(br#"X"#.repeat(510)).concat(br#"""#)) ],
+            strings: vec![ "X".repeat(510) ],
         }.test()
     }
     #[test]
     fn one_string_509() {
-        TestJsonStringParserOld {
-            input:                vec![ head(br#"""#.concat(br#"X"#.repeat(509)).concat(br#"""#)) ],
-            in_string:            vec![ head(br#"X"#.concat(br#"X"#.repeat(509)).concat(br#" "#)) ],
-            escapes:              vec![ ],
-            escaped:              vec![ ],
+        TestJsonStrings {
+            input:   vec![ head(br#"""#.concat(br#"X"#.repeat(509)).concat(br#"""#)) ],
+            strings: vec![ "X".repeat(509) ],
         }.test()
     }
     #[test]
     fn one_string_509_alternate() {
-        TestJsonStringParserOld {
-            input:                vec![ tail(br#"""#.concat(br#"X"#.repeat(509)).concat(br#"""#)) ],
-            in_string:            vec![ tail(br#"X"#.concat(br#"X"#.repeat(509)).concat(br#" "#)) ],
-            escapes:              vec![ ],
-            escaped:              vec![ ],
+        TestJsonStrings {
+            input:   vec![ tail(br#"""#.concat(br#"X"#.repeat(509)).concat(br#"""#)) ],
+            strings: vec![ "X".repeat(509) ],
         }.test()
     }
-
     #[test]
     fn string_across_boundaries() {
-        TestJsonStringParserOld {
-            input:                vec![ tail(br#"""#), head(br#"""#) ],
-            in_string:            vec![ tail(br#"X"#), head(br#" "#) ],
-            escapes:              vec![ ],
-            escaped:              vec![ ],
+        TestJsonStrings {
+            input:   vec![ head(br#"""#), tail(br#"""#) ],
+            strings: vec![ " ".repeat(511+511) ],
+        }.test()
+    }
+    #[test]
+    fn empty_string_across_boundaries() {
+        TestJsonStrings {
+            input:   vec![ tail(br#"""#), head(br#"""#) ],
+            strings: vec![ "" ]
         }.test()
     }
     #[test]
     fn string_across_boundaries_multiple_chunks() {
-        TestJsonStringParserOld {
-            input:                vec![ tail(br#"""#), all(br#" "#), all(br#" "#), head(br#"""#) ],
-            in_string:            vec![ tail(br#"X"#), all(br#"X"#), all(br#"X"#), head(br#" "#) ],
-            escapes:              vec![ ],
-            escaped:              vec![ ],
-        }.test()
-    }
-    #[test]
-    fn string_across_boundaries_long() {
-        TestJsonStringParserOld {
-            input:                vec![ head(br#"""#), chunk(br#" "#.repeat(511),br#"""#) ],
-            in_string:            vec![  all(br#"X"#), chunk(br#"X"#.repeat(511),br#" "#) ],
-            escapes:              vec![ ],
-            escaped:              vec![ ],
+        TestJsonStrings {
+            input:   vec![ tail(br#"""#), all(br#" "#), all(br#" "#), head(br#"""#) ],
+            strings: vec![ " ".repeat(512+512) ],
         }.test()
     }
     #[test]
     fn string_across_boundaries_multiple_chunks_long() {
-        TestJsonStringParserOld {
-            input:                vec![ head(br#"""#), all(br#" "#), all(br#" "#), chunk(br#" "#.repeat(511),br#"""#) ],
-            in_string:            vec![  all(br#"X"#), all(br#"X"#), all(br#"X"#), chunk(br#"X"#.repeat(511),br#" "#) ],
-            escapes:              vec![ ],
-            escaped:              vec![ ],
+        TestJsonStrings {
+            input:   vec![ head(br#"""#), all(br#" "#), all(br#" "#), tail(br#"""#) ],
+            strings: vec![ " ".repeat(511+512+512+511) ],
         }.test()
     }
     #[test]
     fn escaped_quote() {
-        TestJsonStringParserOld {
-            input:                vec![ head(br#""\"""#) ],
-            in_string:            vec![ head(br#"XXX "#) ],
-            escapes:              vec![ head(br#" X  "#) ],
-            escaped:              vec![ head(br#"  X "#) ],
+        TestJsonStrings {
+            input:   vec![ head(br#""\"""#) ],
+            strings: vec![ r#"""# ]
         }.test()
     }
     // These may be valid string bytes, but they are not a valid string :)
@@ -360,233 +277,176 @@ mod find_strings {
     // }
     #[test]
     fn invalid_string_bytes() {
-        TestJsonStringParserOld2 {
-            input:                vec![ head(br#"""#.concat((0x00..=0x19).map(|b| b    ).collect::<Vec<u8>>()).concat(br#"""#)) ],
-            value:                vec![ head(br#"X"#.concat((0x00..=0x19).map(|_| b'X' ).collect::<Vec<u8>>()).concat(br#"X"#)) ],
-            keep:                 vec![ head(br#" "#.concat((0x00..=0x19).map(|_| b' ' ).collect::<Vec<u8>>()).concat(br#" "#)) ],
+        TestJsonStringParser {
+            input:   vec![ head(br#"""#.concat((0x00..=0x19).map(|b| b    ).collect::<Vec<u8>>()).concat(br#"""#)) ],
+            strings: vec![ "" ],
             errors: [(InvalidByteInString,
                                   vec![ head(br#" "#.concat((0x00..=0x19).map(|_| b'X' ).collect::<Vec<u8>>()).concat(br#" "#)) ]),
                     ].iter().cloned().collect()
         }.test()
     }
 
-
-    #[test]
-    fn no_backslashes() {
-        TestJsonStringParserOld {
-            input:       vec![ tail(br#"""#), all(br#" "#), head(br#"""#) ],
-            in_string:   vec![ tail(br#"X"#), all(br#"X"#), head(br#" "#) ],
-            escapes:     vec![ ],
-            escaped:     vec![ ],
-        }.test()
-    }
     #[test]
     fn no_backslashes_first_backslashed() {
-        TestJsonStringParserOld {
-            input:       vec![ tail(br#""\"#), chunk(br#"""#,br#"""#) ],
-            escapes:     vec![ tail(br#" X"#), chunk(br#" "#,br#" "#) ],
-            escaped:     vec![ tail(br#"  "#), chunk(br#"X"#,br#" "#) ],
-            in_string:   vec![ tail(br#"XX"#), chunk(br#"X"#.repeat(511),br#" "#) ],
+        TestJsonStrings {
+            input:   vec![ tail(br#""\"#), chunk(br#"""#,br#"""#) ],
+            strings: vec![ r#"""#.to_string() + &" ".repeat(510) ],
         }.test()
     }
     #[test]
     fn all_backslashes() {
-        TestJsonStringParserOld {
-            input:       vec![ tail(br#"""#), all(br#"\\"#), head(br#"""#) ],
-            escapes:     vec![ tail(br#" "#), all(br#"X "#), head(br#" "#) ],
-            escaped:     vec![ tail(br#" "#), all(br#" X"#), head(br#" "#) ],
-            in_string:   vec![ tail(br#"X"#), all(br#"XX"#), head(br#" "#) ],
+        TestJsonStrings {
+            input:   vec![ tail(br#"""#), all(br#"\\"#), head(br#"""#) ],
+            strings: vec![ r#"\"#.repeat(512/2) ]
         }.test()
     }
     #[test]
     fn all_backslashes_first_backslashed() {
-        TestJsonStringParserOld {
-            input:       vec![ tail(br#""\"#), all(br#"\\"#), head(br#""""#) ],
-            escapes:     vec![ tail(br#" X"#), all(br#" X"#), head(br#"  "#) ],
-            escaped:     vec![ tail(br#"  "#), all(br#"X "#), head(br#"X "#) ],
-            in_string:   vec![ tail(br#"XX"#), all(br#"XX"#), head(br#"X "#) ],
+        TestJsonStrings {
+            input:   vec![ tail(br#""\"#), all(br#"\\"#), head(br#""""#) ],
+            strings: vec![ r#"\"#.repeat(512/2) + r#"""# ],
         }.test()
     }
     #[test]
     fn all_backslashes_first_backslashed_multiple() {
-        TestJsonStringParserOld {
-            input:       vec![ tail(br#""\"#), all(br#"\\"#), all(br#"\\"#), head(br#""""#) ],
-            escapes:     vec![ tail(br#" X"#), all(br#" X"#), all(br#" X"#), head(br#"  "#) ],
-            escaped:     vec![ tail(br#"  "#), all(br#"X "#), all(br#"X "#), head(br#"X "#) ],
-            in_string:   vec![ tail(br#"XX"#), all(br#"XX"#), all(br#"XX"#), head(br#"X "#) ],
+        TestJsonStrings {
+            input:   vec![ tail(br#""\"#), all(br#"\\"#), all(br#"\\"#), head(br#""""#) ],
+            strings: vec![ r#"\"#.repeat((512/2)+(512/2)) + r#"""# ],
         }.test()
     }
     #[test]
     fn all_backslashes_first_backslashed_multiple_multiple() {
-        TestJsonStringParserOld {
-            input:       vec![ tail(br#""\"#), all(br#"\\"#), all(br#"\\"#), chunk(br#"""#,br#"\\\"#), all(br#"\\"#), all(br#"\\"#), all(br#"\\"#), head(br#""""#) ],
-            escapes:     vec![ tail(br#" X"#), all(br#" X"#), all(br#" X"#), chunk(br#" "#,br#"X X"#), all(br#" X"#), all(br#" X"#), all(br#" X"#), head(br#"  "#) ],
-            escaped:     vec![ tail(br#"  "#), all(br#"X "#), all(br#"X "#), chunk(br#"X"#,br#" X "#), all(br#"X "#), all(br#"X "#), all(br#"X "#), head(br#"X "#) ],
-            in_string:   vec![ tail(br#"XX"#), all(br#"XX"#), all(br#"XX"#),  all(br#"XX"#),  all(br#"XX"#), all(br#"XX"#), all(br#"XX"#), head(br#"X "#) ],
+        TestJsonStrings {
+            input:   vec![ tail(br#""\"#), all(br#"\\"#), all(br#"\\"#), chunk(br#""""#,br#""\\\"#), all(br#"\\"#), all(br#"\\"#), all(br#"\\"#), head(br#""""#) ],
+            strings: vec![ r#"\"#.repeat((512/2)+(512/2)) + r#"""#, r#"\"#.repeat(1 + (512/2)+(512/2)+(512/2)) + r#"""# ],
         }.test()
     }
     #[test]
     fn four_backslashes() {
-        TestJsonStringParserOld {
-            input:       vec![ tail(br#"""#), head(br#"\\\\""#) ],
-            escapes:     vec![ tail(br#" "#), head(br#"X X  "#) ],
-            escaped:     vec![ tail(br#" "#), head(br#" X X "#) ],
-            in_string:   vec![ tail(br#"X"#), head(br#"XXXX "#) ],
+        TestJsonStrings {
+            input:   vec![ tail(br#"""#), head(br#"\\\\""#) ],
+            strings: vec![ r#"\\"# ]
         }.test()
     }
     #[test]
     fn four_backslashes_first_backslashed() {
-        TestJsonStringParserOld {
-            input:       vec![ tail(br#""\"#), head(br#"\\\\"""#) ],
-            escapes:     vec![ tail(br#" X"#), head(br#" X X  "#) ],
-            escaped:     vec![ tail(br#"  "#), head(br#"X X X "#) ],
-            in_string:   vec![ tail(br#"XX"#), head(br#"XXXXX "#) ],
+        TestJsonStrings {
+            input:   vec![ tail(br#""\"#), head(br#"\\\\"""#) ],
+            strings: vec![ r#"\\""# ]
         }.test()
     }
     #[test]
     fn five_backslashes() {
-        TestJsonStringParserOld {
-            input:       vec![ tail(br#"""#), head(br#"\\\\\"""#) ],
-            escapes:     vec![ tail(br#" "#), head(br#"X X X  "#) ],
-            escaped:     vec![ tail(br#" "#), head(br#" X X X "#) ],
-            in_string:   vec![ tail(br#"X"#), head(br#"XXXXXX "#) ],
+        TestJsonStrings {
+            input:   vec![ tail(br#"""#), head(br#"\\\\\"""#) ],
+            strings: vec![ r#"\\""# ]
         }.test()
     }
     #[test]
     fn five_backslashes_first_backslashed() {
-        TestJsonStringParserOld {
-            input:       vec![ tail(br#""\"#), head(br#"\\\\\""#) ],
-            escapes:     vec![ tail(br#" X"#), head(br#" X X  "#) ],
-            escaped:     vec![ tail(br#"  "#), head(br#"X X X "#) ],
-            in_string:   vec![ tail(br#"XX"#), head(br#"XXXXX "#) ],
+        TestJsonStrings {
+            input:   vec![ tail(br#""\"#), head(br#"\\\\\""#) ],
+            strings: vec![ r#"\\\"# ]
         }.test()
     }
     #[test]
     fn almost_all_backslashes() {
-        TestJsonStringParserOld {
-            input:       vec![ tail(br#"""#), chunk(br#"\\"#.repeat((512-2)/2),br#"\""#), head(br#"""#) ],
-            escapes:     vec![ tail(br#" "#), chunk(br#"X "#.repeat((512-2)/2),br#"X "#), head(br#" "#) ],
-            escaped:     vec![ tail(br#" "#), chunk(br#" X"#.repeat((512-2)/2),br#" X"#), head(br#" "#) ],
-            in_string:   vec![ tail(br#"X"#), chunk(br#"XX"#.repeat((512-2)/2),br#"XX"#), head(br#" "#) ],
+        TestJsonStrings {
+            input:   vec![ tail(br#"""#), chunk(br#"\\"#.repeat((512-2)/2),br#"\""#), head(br#"""#) ],
+            strings: vec![ r#"\"#.repeat((512-2)/2) + r#"""# ]
         }.test()
     }
     #[test]
     fn almost_all_backslashes_first_backslashed() {
-        TestJsonStringParserOld {
-            input:       vec![ tail(br#""\"#), chunk(br#"\\"#.repeat((512-2)/2),br#"\""#) ],
-            escapes:     vec![ tail(br#" X"#), chunk(br#" X"#.repeat((512-2)/2),br#"  "#) ],
-            escaped:     vec![ tail(br#"  "#), chunk(br#"X "#.repeat((512-2)/2),br#"X "#) ],
-            in_string:   vec![ tail(br#"XX"#), chunk(br#"XX"#.repeat((512-2)/2),br#"X "#) ],
+        TestJsonStrings {
+            input:   vec![ tail(br#""\"#), chunk(br#"\\"#.repeat((512-2)/2),br#"\""#) ],
+            strings: vec![ r#"\"#.repeat((512-2)/2 + 1) ]
         }.test()
     }
     #[test]
     fn almost_all_backslashes_alternate() {
-        TestJsonStringParserOld {
-            input:       vec![ tail(br#"""#), chunk(br#" "#,br#"\\"#.repeat((512-2)/2).concat(br#"\"#)), head(br#""""#) ],
-            escapes:     vec![ tail(br#" "#), chunk(br#" "#,br#"X "#.repeat((512-2)/2).concat(br#"X"#)), head(br#"  "#) ],
-            escaped:     vec![ tail(br#" "#), chunk(br#" "#,br#" X"#.repeat((512-2)/2).concat(br#" "#)), head(br#"X "#) ],
-            in_string:   vec![ tail(br#"X"#), chunk(br#"X"#,br#"XX"#.repeat((512-2)/2).concat(br#"X"#)), head(br#"X "#) ],
+        TestJsonStrings {
+            input:       vec![ tail(br#"""#), chunk(br#" "#, br#"\\"#.repeat((512-2)/2).concat(br#"\"#)), head(br#""""#) ],
+            strings: vec![ r#" "#.to_string() + &r#"\"#.repeat((512-2)/2) + r#"""# ]
         }.test()
     }
     #[test]
     fn almost_all_backslashes_alternate_first_backslashed() {
-        TestJsonStringParserOld {
+        TestJsonStrings {
             input:       vec![ tail(br#""\"#), chunk(br#"""#,br#"\\"#.repeat((512-2)/2).concat(br#"\"#)), head(br#""""#) ],
-            escapes:     vec![ tail(br#" X"#), chunk(br#" "#,br#"X "#.repeat((512-2)/2).concat(br#"X"#)), head(br#"  "#) ],
-            escaped:     vec![ tail(br#"  "#), chunk(br#"X"#,br#" X"#.repeat((512-2)/2).concat(br#" "#)), head(br#"X "#) ],
-            in_string:   vec![ tail(br#"XX"#), chunk(br#"X"#,br#"XX"#.repeat((512-2)/2).concat(br#"X"#)), head(br#"X "#) ],
+            strings: vec![ r#"""#.to_string() + &r#"\"#.repeat((512-2)/2) + r#"""# ]
         }.test()
     }
     #[test]
     fn many_different_backslashes() {
-        TestJsonStringParserOld {
-            input:       vec![ tail(br#"""#), head(br#"\"\\ \\\"\\\\ \\\\\"\\\\\\ \\\\\\\"\\\\\\\\ \\\\\\\\\"\\\\\\\\\\""#.repeat(1)) ],
-            escapes:     vec![ tail(br#" "#), head(br#"X X  X X X X  X X X X X X  X X X X X X X X  X X X X X X X X X X  "#.repeat(1)) ],
-            escaped:     vec![ tail(br#" "#), head(br#" X X  X X X X  X X X X X X  X X X X X X X X  X X X X X X X X X X "#.repeat(1)) ],
-            in_string:   vec![ tail(br#"X"#), head(br#"XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX "#.repeat(1)) ],
+        TestJsonStrings {
+            input:   vec![ tail(br#"""#), head(br#"\"\\ \\\"\\\\ \\\\\"\\\\\\ \\\\\\\"\\\\\\\\ \\\\\\\\\"\\\\\\\\\\""#.repeat(1)) ],
+            strings: vec![ r#""\ \"\\ \\"\\\ \\\"\\\\ \\\\"\\\\\"# ]
         }.test()
     }
     #[test]
     fn many_different_backslashes_first_backslashed() {
-        TestJsonStringParserOld {
-            input:       vec![ tail(br#""\"#), head(br#"\ \\ \\\"\\\\ \\\\\"\\\\\\ \\\\\\\"\\\\\\\\ \\\\\\\\\"\\\\\\\\\\""#.repeat(1)) ],
-            escapes:     vec![ tail(br#" X"#), head(br#"  X  X X X X  X X X X X X  X X X X X X X X  X X X X X X X X X X  "#.repeat(1)) ],
-            escaped:     vec![ tail(br#"  "#), head(br#"X  X  X X X X  X X X X X X  X X X X X X X X  X X X X X X X X X X "#.repeat(1)) ],
-            in_string:   vec![ tail(br#"XX"#), head(br#"XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX "#.repeat(1)) ],
+        TestJsonStrings {
+            input:   vec![ tail(br#""\"#), head(br#"\ \\ \\\"\\\\ \\\\\"\\\\\\ \\\\\\\"\\\\\\\\ \\\\\\\\\"\\\\\\\\\\""#.repeat(1)) ],
+            strings: vec![ r#"\ \ \"\\ \\"\\\ \\\"\\\\ \\\\"\\\\\"# ]
         }.test()
     }
 
     #[test]
     fn every_other_backslash() {
-        TestJsonStringParserOld {
-            input:       vec![ tail(br#"""#),  all(br#"\""#), head(br#"""#) ],
-            escapes:     vec![ tail(br#" "#),  all(br#"X "#), head(br#" "#) ],
-            escaped:     vec![ tail(br#" "#),  all(br#" X"#), head(br#" "#) ],
-            in_string:   vec![ tail(br#"X"#),  all(br#"XX"#), head(br#" "#) ],
+        TestJsonStrings {
+            input:   vec![ tail(br#"""#),  all(br#"\""#), head(br#"""#) ],
+            strings: vec![ r#"""#.repeat(512/2) ]
         }.test()
     }
     #[test]
     fn every_other_backslash_first_backslashed() {
-        TestJsonStringParserOld {
-            input:       vec![ tail(br#""\"#), chunk(br#"\ "#,br#"\""#.repeat((512-2)/2)), head(br#"""#) ],
-            escapes:     vec![ tail(br#" X"#), chunk(br#"  "#,br#"X "#.repeat((512-2)/2)), head(br#" "#) ],
-            escaped:     vec![ tail(br#"  "#), chunk(br#"X "#,br#" X"#.repeat((512-2)/2)), head(br#" "#) ],
-            in_string:   vec![ tail(br#"XX"#), chunk(br#"XX"#,br#"XX"#.repeat((512-2)/2)), head(br#" "#) ],
+        TestJsonStrings {
+            input:   vec![ tail(br#""\"#), chunk(br#"\ "#,br#"\""#.repeat((512-2)/2)), head(br#"""#) ],
+            strings: vec![ r#"\ "#.to_string() + &r#"""#.repeat((512-2)/2) ]
         }.test()
     }
 
     #[test]
     fn every_other_backslash_alternate() {
-        TestJsonStringParserOld {
-            input:       vec![ tail(br#"""#), chunk(br#" \"#,br#""\"#.repeat((512-2)/2)), head(br#""""#) ],
-            escapes:     vec![ tail(br#" "#), chunk(br#" X"#,br#" X"#.repeat((512-2)/2)), head(br#"  "#) ],
-            escaped:     vec![ tail(br#" "#), chunk(br#"  "#,br#"X "#.repeat((512-2)/2)), head(br#"X "#) ],
-            in_string:   vec![ tail(br#"X"#), chunk(br#"XX"#,br#"XX"#.repeat((512-2)/2)), head(br#"X "#) ],
+        TestJsonStrings {
+            input:   vec![ tail(br#"""#), chunk(br#" \"#,br#""\"#.repeat((512-2)/2)), head(br#""""#) ],
+            strings: vec![ r#" "#.to_string() + &r#"""#.repeat(512/2) ]
         }.test()
     }
     #[test]
     fn every_other_backslash_alternate_first_backslashed() {
-        TestJsonStringParserOld {
-            input:       vec![ tail(br#""\"#), chunk(br#""\"#,br#""\"#.repeat((512-2)/2)), head(br#""""#) ],
-            escapes:     vec![ tail(br#" X"#), chunk(br#" X"#,br#" X"#.repeat((512-2)/2)), head(br#"  "#) ],
-            escaped:     vec![ tail(br#"  "#), chunk(br#"X "#,br#"X "#.repeat((512-2)/2)), head(br#"X "#) ],
-            in_string:   vec![ tail(br#"XX"#), chunk(br#"XX"#,br#"XX"#.repeat((512-2)/2)), head(br#"X "#) ],
+        TestJsonStrings {
+            input:   vec![ tail(br#""\"#), head(br#""\"#.repeat(512/2)), head(br#""""#) ],
+            strings: vec![ r#"""#.repeat(512/2 + 1) ]
         }.test()
     }
     #[test]
     fn every_other_2_backslash() {
-        TestJsonStringParserOld {
-            input:       vec![ tail(br#"""#),  head(br#"\\ "#.concat(br#"\\ "#.repeat((512-4)/3)).concat(br#"""#)) ],
-            escapes:     vec![ tail(br#" "#),  head(br#"X  "#.concat(br#"X  "#.repeat((512-4)/3)).concat(br#" "#)) ],
-            escaped:     vec![ tail(br#" "#),  head(br#" X "#.concat(br#" X "#.repeat((512-4)/3)).concat(br#" "#)) ],
-            in_string:   vec![ tail(br#"X"#),  head(br#"XXX"#.concat(br#"XXX"#.repeat((512-4)/3)).concat(br#" "#)) ],
+        TestJsonStrings {
+            input:   vec![ tail(br#"""#),  head(br#"\\ "#.concat(br#"\\ "#.repeat((512-4)/3)).concat(br#"""#)) ],
+            strings: vec![ r#"\ "#.repeat(1 + (512-4)/3) ]
         }.test()
     }
     #[test]
     fn every_other_2_backslash_first_backslashed() {
-        TestJsonStringParserOld {
-            input:       vec![ tail(br#""\"#),  head(br#"\\""#.concat(br#"\\ "#.repeat((512-4)/3)).concat(br#"""#)) ],
-            escapes:     vec![ tail(br#" X"#),  head(br#" X "#.concat(br#"X  "#.repeat((512-4)/3)).concat(br#" "#)) ],
-            escaped:     vec![ tail(br#"  "#),  head(br#"X X"#.concat(br#" X "#.repeat((512-4)/3)).concat(br#" "#)) ],
-            in_string:   vec![ tail(br#"XX"#),  head(br#"XXX"#.concat(br#"XXX"#.repeat((512-4)/3)).concat(br#" "#)) ],
+        TestJsonStrings {
+            input:   vec![ tail(br#""\"#),  head(br#"\\""#.concat(br#"\\ "#.repeat((512-4)/3)).concat(br#"""#)) ],
+            strings: vec![ r#"\""#.to_string() + &r#"\ "#.repeat((512-4)/3) ]
         }.test()
     }
     #[test]
     fn every_other_2_backslash_alternate() {
-        TestJsonStringParserOld {
-            input:       vec![ tail(br#"""#),  head(br#" \\"#.concat(br#" \\"#.repeat((512-4)/3)).concat(br#"""#)) ],
-            escapes:     vec![ tail(br#" "#),  head(br#" X "#.concat(br#" X "#.repeat((512-4)/3)).concat(br#" "#)) ],
-            escaped:     vec![ tail(br#" "#),  head(br#"  X"#.concat(br#"  X"#.repeat((512-4)/3)).concat(br#" "#)) ],
-            in_string:   vec![ tail(br#"X"#),  head(br#"XXX"#.concat(br#"XXX"#.repeat((512-4)/3)).concat(br#" "#)) ],
+        TestJsonStrings {
+            input:   vec![ tail(br#"""#),  head(br#" \\"#.concat(br#" \\"#.repeat((512-4)/3)).concat(br#"""#)) ],
+            strings: vec![ r#" \"#.repeat(1 + (512-4)/3) ]
         }.test()
     }
     #[test]
     fn every_other_2_backslash_alternate_first_backslashed() {
-        TestJsonStringParserOld {
-            input:       vec![ tail(br#""\"#),  head(br#""\\"#.concat(br#" \\"#.repeat((512-4)/3)).concat(br#"""#)) ],
-            escapes:     vec![ tail(br#" X"#),  head(br#" X "#.concat(br#" X "#.repeat((512-4)/3)).concat(br#" "#)) ],
-            escaped:     vec![ tail(br#"  "#),  head(br#"X X"#.concat(br#"  X"#.repeat((512-4)/3)).concat(br#" "#)) ],
-            in_string:   vec![ tail(br#"XX"#),  head(br#"XXX"#.concat(br#"XXX"#.repeat((512-4)/3)).concat(br#" "#)) ],
+        TestJsonStrings {
+            input:   vec![ tail(br#""\"#),  head(br#""\\"#.concat(br#" \\"#.repeat((512-4)/3)).concat(br#"""#)) ],
+            strings: vec![ r#""\"#.to_string() + &r#" \"#.repeat((512-4)/3) ]
         }.test()
     }
 }

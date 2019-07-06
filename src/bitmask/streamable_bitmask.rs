@@ -383,14 +383,6 @@ pub(crate) fn iter_bits<'a, T: StreamableBitmask+'a>(mask: T) -> impl Iterator<I
 pub(crate) fn into_x_str<T: StreamableBitmask>(mask: T) -> String {
     iter_bits(mask).map(|bit| if bit { 'X' } else { ' ' }).fold(String::with_capacity(T::NUM_BITS as usize), |mut s,bit| { s.push(bit); s })
 }
-#[cfg(test)]
-pub(crate) fn into_x_slice(mask: u64x8) -> [u8;512] {
-    let mut result = [b' ';512];
-    for n in 0..512 {
-        if mask.get_bit(n as u32) { result[n] = b'X'; }
-    }
-    result
-}
 
 #[cfg(test)]
 mod tests {
