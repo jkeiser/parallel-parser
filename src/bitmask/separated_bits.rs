@@ -193,9 +193,6 @@ impl SeparatedBits {
         // optimize this if away for constant values of b. Test that assumption.
         for n in bits.rev() {
             let a = self[n];
-            println!("Comparing to bit {} of {}: {}", n, b, b.bit(n));
-            // println!("a: {:?}", a);
-            println!("{:10}: {:064b}", "a", a.extract(0).reverse_bits());
             if b.bit(n) {
                 // b == 1
                 //  a | b | decided | result | Case    |
@@ -222,10 +219,6 @@ impl SeparatedBits {
                 result = (result & decided) | (a & !decided);
                 decided |= a;
             }
-            println!("{:10}: {:064b}", "result", result.extract(0).reverse_bits());
-            println!("{:10}: {:064b}", "decided", decided.extract(0).reverse_bits());
-            // println!("result: {:?}", result);
-            // println!("decided: {:?}", decided);
         }
 
         // NOTE: we're assuming that any work on any low zeroes will be optimized away as well,

@@ -235,6 +235,8 @@ fn report_errors_after(result: &mut JsonResult, kind: JsonErrorKind, error_mask:
     // if as more likely than the else, by default.
     if !error_mask.any() {
     } else {
+        println!("ERROR AFTER: {}", kind);
+        println!("{:10}: {}", "error_mask", into_x_str(error_mask));
         report_error_after(result, kind, error_mask);
     }
     error_mask
@@ -257,6 +259,8 @@ fn report_error_after(result: &mut JsonResult, kind: JsonErrorKind, error_mask: 
 
 #[cold]
 fn report_error(result: &mut JsonResult, error: JsonError) {
+    println!("ERROR: {}", error.kind);
+    println!("{:10}: {}", "error_mask", into_x_str(error.error_mask));
     result.errors.push(error)
 }
 
@@ -347,6 +351,44 @@ impl JsonStringParser {
 }
 
 impl JsonStringEscapeParser {
+    fn parse(&mut self, chunk: &mut JsonChunk, quote: u64x8, backslash: u64x8, escapes: u64x8, escaped: u64x8) -> u64x8 {
+        // Escapes are generally rare enough that we want to skip processing if we can
+        if !escaped.any() {
+            *self = Self::default();
+            escapes
+        } else {
+            // Replace single-character escapes (\b \f \n \r \t)
+            // b (62 01100010) -> 08 00001000
+            // f (66 01100110) -> 0C 00001100
+            // n (6E 01101110) -> 0A 00001010
+            // r (72 01110010) -> 0D 00001101
+            // t (74 01110100) -> 09 00001001
+            const ALL_BITS: u64x8 = u64x8::ALL_BITS;
+            const NO_BITS: u64x8 = u64x8::NO_BITS;
+            let b     = chunk.bits.where_eq(b'b'); // b 62 01100010
+            let f     = chunk.bits.where_eq(b'f'); // f 66 01100110
+            let n     = chunk.bits.where_eq(b'n'); // n 6E 01101110
+            let r     = chunk.bits.where_eq(b'r'); // r 72 01110010
+            let t     = chunk.bits.where_eq(b't'); // t 74 01110100
+            let replace = escaped & (b | f | n | r | t);
+            chunk.bits.replace_where(replace, [
+                NO_BITS,  NO_BITS, NO_BITS, NO_BITS,
+                ALL_BITS,   f | r,       n,   r | t,
+            ]);
+
+            // Replace Unicode escapes
+            let u     = chunk.bits.where_eq(b'u'); // u 75 01111001
+            let mut discard = escapes;
+            discard |= self.replace_escaped_unicode(chunk, escaped & u);
+
+            // Discover invalid escapes (above plus the non-replaced escapes \" \\ and \/)
+            let slash = chunk.bits.where_eq(b'/'); // / 2F 00101111
+            discard |= chunk.report_errors(InvalidEscapeCode, escaped & !(replace | u | quote | backslash | slash));
+
+            discard
+        }
+    }
+
     fn parse_hex_digit(&mut self, chunk: &mut JsonChunk) -> (u64x8, u64x8, u64x8, u64x8, u64x8) {
         // 0-9 (30-39 00110000-00111001)
         // a-f (61-66 01100001-01100110)
@@ -364,7 +406,7 @@ impl JsonStringEscapeParser {
         let is_0_9 = chunk.bits[5] & (
                 !chunk.bits[3] | !(chunk.bits[2] & chunk.bits[1])
             );
-        let is_hex = chunk.bits[7] & (is_alpha ^ chunk.bits[4]) & (
+        let is_hex = !chunk.bits[7] & (is_alpha ^ chunk.bits[4]) & (
             ( is_alpha & is_a_f) | (!is_alpha & is_0_9)
         );
         let hex0 = chunk.bits[0] ^ is_alpha;
@@ -372,45 +414,6 @@ impl JsonStringEscapeParser {
         let hex2 = chunk.bits[2] ^ (is_alpha & chunk.bits[0] & chunk.bits[1]);
         let hex3 = chunk.bits[3] | is_alpha;
         (is_hex, hex3, hex2, hex1, hex0)
-    }
-
-    fn parse(&mut self, chunk: &mut JsonChunk, quote: u64x8, backslash: u64x8, escapes: u64x8, escaped: u64x8) -> u64x8 {
-        // Escapes are generally rare enough that we want to skip processing if we can
-        if !escaped.any() {
-            *self = Self::default();
-            escapes
-        } else {
-            let b     = chunk.bits.where_eq(b'b'); // b 62 01100010
-            let f     = chunk.bits.where_eq(b'f'); // f 66 01100110
-            let n     = chunk.bits.where_eq(b'n'); // n 6E 01101110
-            let r     = chunk.bits.where_eq(b'r'); // r 72 01110010
-            let t     = chunk.bits.where_eq(b't'); // t 74 01110100
-
-            // Replace single-character escapes (\b \f \n \r \t)
-            // b (62 01100010) -> 08 00001000
-            // f (66 01100110) -> 0C 00001100
-            // n (6E 01101110) -> 0A 00001010
-            // r (72 01110010) -> 0D 00001101
-            // t (74 01110100) -> 09 00001001
-            const ALL_BITS: u64x8 = u64x8::ALL_BITS;
-            const NO_BITS: u64x8 = u64x8::NO_BITS;
-            let replace = escaped & (b | f | n | r | t);
-            chunk.bits.replace_where(replace, [
-                NO_BITS,  NO_BITS, NO_BITS, NO_BITS,
-                ALL_BITS,   f | r,       n,   r | t
-            ]);
-
-            // Replace Unicode escapes
-            let u     = chunk.bits.where_eq(b'u'); // u 75 01111001
-            let mut discard = escapes;
-            discard |= self.replace_escaped_unicode(chunk, escaped & u);
-
-            // Discover invalid escapes (above plus the non-replaced escapes \" \\ and \/)
-            let slash = chunk.bits.where_eq(b'/'); // / 2F 00101111
-            discard |= chunk.report_errors(InvalidEscapeCode, escaped & !(replace | u | quote | backslash | slash));
-
-            discard
-        }
     }
 
     ///
@@ -438,7 +441,7 @@ impl JsonStringEscapeParser {
             // 8 = 1000
             //     ^^^^
             //  hex3..hex0
-            let (is_hex, hex3, hex2, hex0, hex1) = self.parse_hex_digit(chunk);
+            let (is_hex, hex3, hex2, hex1, hex0) = self.parse_hex_digit(chunk);
             let prev_hex3 = hex3.prev(&mut self.prev_hex3);
             let prev_hex2 = hex2.prev(&mut self.prev_hex2);
             let prev_hex1 = hex1.prev(&mut self.prev_hex1);
@@ -452,7 +455,7 @@ impl JsonStringEscapeParser {
             // If we find a non-hex byte, stop--otherwise we could end up overwriting something we
             // shouldn't. This means if something is wrong we may end up partly transforming the XXXX,
             // but at least we won't overwrite later bytes (and these bytes will be marked invalid).
-            let mut do_not_copy = chunk.report_errors(UnicodeEscapeTooShort, (u1 | u2 | u3 | u4) & !is_hex);
+            let mut do_not_copy = escaped_u | chunk.report_errors(UnicodeEscapeTooShort, (u1 | u2 | u3 | u4) & !is_hex);
             let u1 = u1 & is_hex;
             let u2 = u2 & is_hex;
             let u3 = u3 & is_hex;
@@ -462,7 +465,7 @@ impl JsonStringEscapeParser {
             // \u u1 u2 u3 u4
             let u2_lead = prev_hex3 | prev_hex2 | prev_hex1 | prev_hex0 | hex3;
             let u3_cont = u2_lead.prev(&mut self.u3_cont);
-            let u3_none = !u3_cont & !(prev_hex2 | prev_hex1 | prev_hex0 | hex3 | hex2);
+            let u3_none = !u3_cont & !(prev_hex2 | prev_hex1 | prev_hex0 | hex3);
             let u4_lead = u3_none.prev(&mut self.u4_lead);
 
             //
@@ -492,23 +495,21 @@ impl JsonStringEscapeParser {
             const NO_BITS: u64x8 = u64x8::NO_BITS;
 
             // Replace u2 (leading 3 byte)
-            let replace_u2 = u2 & u2_lead;
-            chunk.bits.replace_where(replace_u2, [
+            chunk.bits.replace_where(u2, [
                 ALL_BITS,  ALL_BITS,  ALL_BITS,  NO_BITS,
                 prev_hex3, prev_hex2, prev_hex1, prev_hex0
             ]);
 
             // Replace u3 (leading 2 byte or 3 byte cont)
-            let replace_u3 = u3 & !u3_none;
-            chunk.bits.replace_where(replace_u3, [
-                ALL_BITS,   !u3_cont,   prev_hex3, prev_hex2,
-                prev_hex1, prev_hex0,        hex3,      hex2
+            chunk.bits.replace_where(u3, [
+                ALL_BITS,   !u3_cont,   u3_cont & prev_hex3, prev_hex2,
+                prev_hex1, prev_hex0,                  hex3,      hex2
             ]);
 
             // Replace u4 (ASCII byte, or 2/3 byte cont)
             chunk.bits.replace_where(u4, [
-                !u4_lead, prev_hex2, prev_hex1, prev_hex0,
-                    hex3,      hex2,      hex1,      hex0
+                !u4_lead, u4_lead & prev_hex2, prev_hex1, prev_hex0,
+                    hex3,                hex2,      hex1,      hex0
             ]);
 
             do_not_copy
