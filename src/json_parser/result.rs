@@ -8,6 +8,7 @@ pub struct JsonResult {
     // pub modified_json: Vec<[u8;512]>,
     /// Errors that occurred during parsing
     pub(crate) errors: Vec<JsonError>,
+    pub(crate) len: usize,
     pub(crate) string_bytes: Vec<u8>,
     pub(crate) string_indices: Vec<usize>,
     // /// The index of every line start, for error reporting

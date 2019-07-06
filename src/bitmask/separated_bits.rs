@@ -3,6 +3,9 @@ use super::streamable_bitmask::*;
 use packed_simd::*;
 use std::ops::{Bound,Index,IndexMut,RangeBounds,RangeInclusive};
 
+///
+/// Manage 512 bytes with a 512-bit mask for each bit, making many comparisons more efficient.
+/// 
 #[derive(Debug,Default)]
 pub struct SeparatedBits([u64x8;8]);
 
@@ -61,6 +64,65 @@ pub fn separate_bits(bytes: &[u8;512]) -> SeparatedBits {
 impl SeparatedBits {
     pub fn bit(&self, n: usize) -> u64x8 {
         self.0[n]
+    }
+
+    pub fn replace_where(&mut self, mask: u64x8, bits: [u64x8;8]) {
+        for i in 0..8 {
+            self[i] = (mask & bits[7-i]) | (!mask & self[i]);
+        }
+    }
+
+    pub fn reconstruct_bytes(&self, buffer: &mut [u8;512]) {
+        //
+        // Where this comes from:
+        // - [Fastest way to unpack 32 bits to a 32 byte SIMD vector](https://stackoverflow.com/questions/24225786/fastest-way-to-unpack-32-bits-to-a-32-byte-simd-vector)
+        // See also:
+        // - [How to perform the inverse of _mm256_movemask_epi8 (VPMOVMSKB)?](https://stackoverflow.com/questions/21622212/how-to-perform-the-inverse-of-mm256-movemask-epi8-vpmovmskb)
+        // - [is there an inverse instruction to the movemask instruction in intel avx2?](https://stackoverflow.com/questions/36488675/is-there-an-inverse-instruction-to-the-movemask-instruction-in-intel-avx2)
+        //
+        for chunk in 0..8 {
+            let chunk_start = 64*chunk;
+            let mut bytes = u8x64::splat(0);
+        
+            // Pick up each 64-bit mask, and create each bit of the result from it.
+            for bit in 0..8 {
+                // TODO AVX-512's mask operations supposedly make all this a ton better
+
+                // These are the bits we want to mask into the final byte
+                let bits = self[bit].extract(chunk);
+
+                // Get the bytes that have the bits we need.
+                let mut expanded = u8x64::from_bits(u64x8::splat(bits));
+                expanded = shuffle!(expanded, [
+                    0,0,0,0,0,0,0,0,
+                    1,1,1,1,1,1,1,1,
+                    2,2,2,2,2,2,2,2,
+                    3,3,3,3,3,3,3,3,
+                    4,4,4,4,4,4,4,4,
+                    5,5,5,5,5,5,5,5,
+                    6,6,6,6,6,6,6,6,
+                    7,7,7,7,7,7,7,7
+                ]);
+
+                // Move the bits we want into bit 0 of each byte, and then mask out everything else.
+                expanded >>= u8x64::new(
+                    0,1,2,3,4,5,6,7,
+                    0,1,2,3,4,5,6,7,
+                    0,1,2,3,4,5,6,7,
+                    0,1,2,3,4,5,6,7,
+                    0,1,2,3,4,5,6,7,
+                    0,1,2,3,4,5,6,7,
+                    0,1,2,3,4,5,6,7,
+                    0,1,2,3,4,5,6,7,
+                );
+                expanded &= 0x01;
+
+                // Move the bits into the correct position and put them in the result.
+                expanded <<= bit as u32;
+                bytes |= expanded;
+            }
+            bytes.write_to_slice_unaligned(&mut buffer[chunk_start..(chunk_start+64)]);
+        }
     }
 
     pub fn where_bits_eq(&self, b: u8, bits: impl Iterator<Item=usize>) -> u64x8 {

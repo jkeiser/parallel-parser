@@ -117,10 +117,15 @@ mod find_strings {
                 let mut actual_strings: Vec<String> = vec![];
                 let mut current_string = None;
                 let mut parser = JsonStringParser::default();
-                let mut chunk = JsonChunk::default();
-                for (chunk_index,input) in self.input.iter().enumerate() {
-                    chunk = chunk.next(input, chunk_index);
-                    let ValueMask { handled, keep } = parser.parse(&mut chunk);
+                let mut result = JsonResult::default();
+                let mut modified_input = self.input.clone();
+                for (chunk_index,input) in modified_input.iter_mut().enumerate() {
+                    let ValueMask { handled, keep } = {
+                        let mut chunk = JsonChunk::new(result, input, chunk_index);
+                        let value_mask = parser.parse(&mut chunk);
+                        result = chunk.finish();
+                        value_mask
+                    };
                     for i in 0..512 {
                         if handled.get_bit(i) {
                             let mut vec = current_string.unwrap_or_else(|| Vec::new());
@@ -137,8 +142,8 @@ mod find_strings {
                 if let Some(vec) = current_string {
                     actual_strings.push(String::from_utf8(vec).unwrap());
                 }
-                parser.finish(&mut chunk);
-                (actual_strings, chunk.finish())
+                parser.finish(&mut result);
+                (actual_strings, result)
             };
 
             // Validate actual vs. expected strings
@@ -277,6 +282,41 @@ mod find_strings {
         TestJsonStrings {
             input:   vec![ head(br#""\/""#) ],
             strings: vec![ r#"/"# ]
+        }.test()
+    }
+    #[test]
+    fn escaped_b() {
+        TestJsonStrings {
+            input:   vec![ head(br#""\b""#) ],
+            strings: vec![ "\x08" ]
+        }.test()
+    }
+    #[test]
+    fn escaped_f() {
+        TestJsonStrings {
+            input:   vec![ head(br#""\f""#) ],
+            strings: vec![ "\x0C" ]
+        }.test()
+    }
+    #[test]
+    fn escaped_r() {
+        TestJsonStrings {
+            input:   vec![ head(br#""\r""#) ],
+            strings: vec![ "\r" ]
+        }.test()
+    }
+    #[test]
+    fn escaped_t() {
+        TestJsonStrings {
+            input:   vec![ head(br#""\t""#) ],
+            strings: vec![ "\t" ]
+        }.test()
+    }
+    #[test]
+    fn escaped_n() {
+        TestJsonStrings {
+            input:   vec![ head(br#""\n""#) ],
+            strings: vec![ "\n" ]
         }.test()
     }
     #[test]

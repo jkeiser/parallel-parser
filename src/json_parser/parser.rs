@@ -6,13 +6,6 @@ use crate::bitmask::maskable::*;
 use JsonErrorKind::*;
 
 #[derive(Debug,Default)]
-pub struct JsonChunk {
-    result: JsonResult,
-    bits: SeparatedBits,
-    chunk_index: usize,
-}
-
-#[derive(Debug,Default)]
 pub struct JsonParser {
     utf8_validator: Utf8Validator,
     string_parser: JsonStringParser,
@@ -20,6 +13,11 @@ pub struct JsonParser {
     number_parser: JsonNumberParser,
 }
 
+///
+/// UTF-8 validator.
+/// 
+/// All state is there to hold overflow between chunks.
+///
 #[derive(Debug,Default)]
 pub struct Utf8Validator {
     cont1: u8,
@@ -31,41 +29,131 @@ pub struct Utf8Validator {
     prev_f4: bool
 }
 
+///
+/// String parser.
+/// 
+/// All state is there to hold overflow between chunks.
+/// 
 #[derive(Debug,Default)]
 pub struct JsonStringParser {
+    ///
+    /// True if the next byte has a backslash in front of it (might not be escaped, though).
+    /// 
     backslashed: bool,
+    ///
+    /// True if the last byte was in a backslash series starting on an odd boundary.
+    /// 
     backslash_series_starting_on_odd_boundary: bool,
+    ///
+    /// True if the next byte will be escaped.
+    /// 
     escaped: bool,
+    ///
+    /// True if we are still in a unclosed string.
+    ///
     in_string: bool,
+    ///
+    /// State for escape parsing. Mostly used to parse \uXXXX
+    ///
     json_string_escape_parser: JsonStringEscapeParser,
 }
 
+///
+/// String escape parser.
+/// 
+/// Used by `JsonStringParser`.
+/// 
+/// All state is there to hold overflow between chunks, and all of that is for \uXXXX.
+/// 
 #[derive(Debug,Default)]
 struct JsonStringEscapeParser {
+    ///
+    /// True if the previous ascii byte was 8-F (1xxx).
+    /// 
     prev_hex3: bool,
+    ///
+    /// True if the previous ascii byte was 4-7 or B-F (x1xx).
+    /// 
     prev_hex2: bool,
+    ///
+    /// True if the previous ascii byte was 2-3, 6-7, A-B or E-F (xx1x).
+    /// 
     prev_hex1: bool,
+    ///
+    /// True if the previous ascii byte was even (xxx1).
+    /// 
     prev_hex0: bool,
+    ///
+    /// True if the next byte is just after \u (\uXxxx).
+    /// 
     u1: bool,
+    ///
+    /// True if the next byte is the second byte after \u (\uxXxx).
+    /// 
     u2: bool,
+    ///
+    /// True if the next byte is the third byte after \u (\uxxXx).
+    /// 
     u3: bool,
+    ///
+    /// True if the next byte is the fourth byte after \u (\uxxxX).
+    /// 
     u4: bool,
+    ///
+    /// True if the previous byte was u2 and we are in a three-byte Unicode character.
+    /// 
     u3_cont: bool,
+    ///
+    /// True if the previous byte was u3 and we are in a one-byte Unicode character.
+    /// 
     u4_lead: bool,
 }
 
 #[derive(Debug,Default)]
 pub struct JsonLiteralNamesParser {
+    ///
+    /// True if the last character was t.
+    /// 
     t1: bool,
+    ///
+    /// True if the last character was r.
+    /// 
     r1: bool,
+    ///
+    /// True if the last character was u.
+    /// 
     u1: bool,
+    ///
+    /// True if the last character was f.
+    /// 
     f1: bool,
+    ///
+    /// True if the last character was a.
+    /// 
     a1: bool,
+    ///
+    /// True if the last character was l.
+    /// 
     l1: bool,
+    ///
+    /// True if the last character was s.
+    /// 
     s1: bool,
+    ///
+    /// True if the last character was n.
+    /// 
     n1: bool,
+    ///
+    /// True if there was an "r" 2 characters ago.
+    /// 
     r2: u8,
+    ///
+    /// True if there was a "u" 2 characters ago.
+    /// 
     u2: u8,
+    ///
+    /// True if there was an "n" 2 characters ago.
+    /// 
     n2: u8,
 }
 
@@ -74,37 +162,57 @@ pub struct JsonNumberParser {
 
 }
 
+pub struct JsonChunk<'a> {
+    pub(crate) result: JsonResult,
+    pub(crate) input: &'a mut [u8;512],
+    bits: SeparatedBits,
+    chunk_index: usize,
+}
+
 impl JsonParser {
-    pub fn parse(&mut self, chunk: &mut JsonChunk) {
-        self.utf8_validator.validate(chunk);
-        self.string_parser.parse(chunk);
-        self.literal_names_parser.parse(chunk);
-        self.number_parser.parse(chunk);
+    pub fn parse_chunks(input: &mut Vec<[u8;512]>) -> JsonResult {
+        let mut parser = JsonParser::default();
+        let mut result = JsonResult::default();
+        for chunk_index in 0..input.len() {
+            result = parser.parse(result, &mut input[chunk_index], chunk_index);
+        }
+        parser.finish(result)
     }
-    pub fn finish(mut self, chunk: &mut JsonChunk) {
-        self.string_parser.finish(chunk);
+    pub fn parse(&mut self, result: JsonResult, input: &mut [u8;512], chunk_index: usize) -> JsonResult {
+        let mut chunk = JsonChunk::new(result, input, chunk_index);
+        self.utf8_validator.validate(&mut chunk);
+        self.string_parser.parse(&mut chunk);
+        self.literal_names_parser.parse(&mut chunk);
+        self.number_parser.parse(&mut chunk);
+        chunk.finish()
+    }
+    pub fn finish(mut self, mut result: JsonResult) -> JsonResult {
+        self.string_parser.finish(&mut result);
+        result
     }
 }
 
-impl JsonChunk {
-    pub fn next(mut self, input: &[u8;512], chunk_index: usize) -> Self {
+impl<'a> JsonChunk<'a> {
+    pub(crate) fn new(mut result: JsonResult, input: &'a mut [u8;512], chunk_index: usize) -> Self {
         println!("{:10}: {}", "input", String::from_utf8_lossy(input));
         let bits = separate_bits(input);
-        println!("{:10}: {}", "bit0", into_x_str(bits[0]));
-        println!("{:10}: {}", "bit1", into_x_str(bits[1]));
-        println!("{:10}: {}", "bit2", into_x_str(bits[2]));
-        println!("{:10}: {}", "bit3", into_x_str(bits[3]));
-        println!("{:10}: {}", "bit4", into_x_str(bits[4]));
-        println!("{:10}: {}", "bit5", into_x_str(bits[5]));
-        println!("{:10}: {}", "bit6", into_x_str(bits[6]));
         println!("{:10}: {}", "bit7", into_x_str(bits[7]));
-        self.bits = bits;
-        self.chunk_index = chunk_index;
-        self
+        println!("{:10}: {}", "bit6", into_x_str(bits[6]));
+        println!("{:10}: {}", "bit5", into_x_str(bits[5]));
+        println!("{:10}: {}", "bit4", into_x_str(bits[4]));
+        println!("{:10}: {}", "bit3", into_x_str(bits[3]));
+        println!("{:10}: {}", "bit2", into_x_str(bits[2]));
+        println!("{:10}: {}", "bit1", into_x_str(bits[1]));
+        println!("{:10}: {}", "bit0", into_x_str(bits[0]));
+        result.len += 512;
+        JsonChunk { input, result, bits, chunk_index }
     }
 
-    pub fn finish(self) -> JsonResult {
-        self.result
+    pub(crate) fn finish(self) -> JsonResult {
+        let JsonChunk { input, result, bits, .. } = self;
+        bits.reconstruct_bytes(input);
+        println!("{:10}: {}", "input", String::from_utf8_lossy(input));
+        result
     }
 
     fn report_errors(&mut self, kind: JsonErrorKind, error_mask: u64x8) -> u64x8 {
@@ -114,16 +222,44 @@ impl JsonChunk {
         // if as more likely than the else, by default.
         if !error_mask.any() {
         } else {
-            self.report_error(JsonError { kind, chunk_index: self.chunk_index, error_mask });
+            report_error(&mut self.result, JsonError { kind, chunk_index: self.chunk_index, error_mask });
         }
         error_mask
     }
-
-    #[cold]
-    fn report_error(&mut self, error: JsonError) {
-        self.result.errors.push(error)
-    }
 }
+
+fn report_errors_after(result: &mut JsonResult, kind: JsonErrorKind, error_mask: u64x8) -> u64x8 {
+    // BRANCH NOTE: JSON errors happen rarely in normal parsing situations, making this a noop branch.
+    // #[cold] on the report_error() function is how we tag that; putting it in the else clause
+    // is meant to further reinforce it, since many compilers (I dunno if this one does) treat the
+    // if as more likely than the else, by default.
+    if !error_mask.any() {
+    } else {
+        report_error_after(result, kind, error_mask);
+    }
+    error_mask
+}
+
+#[cold]
+fn report_error_after(result: &mut JsonResult, kind: JsonErrorKind, error_mask: u64x8) -> u64x8 {
+    let chunk_index = result.len / 512;
+    let start_index = result.len % 512;
+    let first_error_mask = error_mask >> start_index as u32;
+    if first_error_mask.any() {
+        result.errors.push(JsonError { kind, chunk_index, error_mask: first_error_mask });
+    }
+    let next_error_mask = error_mask << (512 - start_index) as u32;
+    if next_error_mask.any() {
+        result.errors.push(JsonError { kind, chunk_index: chunk_index + 1, error_mask: next_error_mask });
+    }
+    error_mask
+}
+
+#[cold]
+fn report_error(result: &mut JsonResult, error: JsonError) {
+    result.errors.push(error)
+}
+
 
 #[derive(Debug,Default)]
 pub struct ValueMask {
@@ -153,15 +289,16 @@ impl JsonStringParser {
             // Figure out which characters are escaped
             let (escapes, escaped, backslash) = self.find_escapes(chunk);
 
+            // Find string characters (every other quote)
             let real_quote = quote & !escaped;
             let in_string = real_quote.between_pairs(&mut self.in_string);
             println!("{:10}: {}", "in_string", into_x_str(in_string));
 
+            // Check for invalid string characters (00-1F)
+            let mut keep = in_string & !real_quote;
             let handled = in_string | real_quote;
-            let mut keep = in_string & !real_quote & !escapes; // We don't treat the " or the escapes (backslashes) as part of the string.
-
-            // Check for invalid string characters (00-1F).
             keep &= !chunk.report_errors(InvalidByteInString, chunk.bits.where_lt(0x20) & in_string);
+
             // Replace and validate string escape characters (\n, \\, etc.)
             keep &= !self.json_string_escape_parser.parse(chunk, quote, backslash, escapes, escaped);
 
@@ -177,9 +314,9 @@ impl JsonStringParser {
     /// 
     /// (handle unterminated strings).
     /// 
-    pub fn finish(&mut self, chunk: &mut JsonChunk) {
+    pub fn finish(&mut self, result: &mut JsonResult) {
         let error_if_in_string = m64x8::splat(self.in_string).select(u64x8::FIRST_BIT, u64x8::NO_BITS);
-        chunk.report_errors(UnterminatedString, error_if_in_string);
+        report_errors_after(result, UnterminatedString, error_if_in_string);
     }
 
     ///
@@ -241,7 +378,7 @@ impl JsonStringEscapeParser {
         // Escapes are generally rare enough that we want to skip processing if we can
         if !escaped.any() {
             *self = Self::default();
-            u64x8::NO_BITS
+            escapes
         } else {
             let b     = chunk.bits.where_eq(b'b'); // b 62 01100010
             let f     = chunk.bits.where_eq(b'f'); // f 66 01100110
@@ -255,15 +392,13 @@ impl JsonStringEscapeParser {
             // n (6E 01101110) -> 0A 00001010
             // r (72 01110010) -> 0D 00001101
             // t (74 01110100) -> 09 00001001
+            const ALL_BITS: u64x8 = u64x8::ALL_BITS;
+            const NO_BITS: u64x8 = u64x8::NO_BITS;
             let replace = escaped & (b | f | n | r | t);
-            chunk.bits[0] = chunk.bits[0].replace_where(replace, r | t);
-            chunk.bits[1] = chunk.bits[1].replace_where(replace, n);
-            chunk.bits[2] = chunk.bits[2].replace_where(replace, f | r);
-            chunk.bits[3] = chunk.bits[3].replace_where(replace, u64x8::ALL_BITS);
-            chunk.bits[4] = chunk.bits[4].replace_where(replace, u64x8::NO_BITS);
-            chunk.bits[5] = chunk.bits[5].replace_where(replace, u64x8::NO_BITS);
-            chunk.bits[6] = chunk.bits[6].replace_where(replace, u64x8::NO_BITS);
-            chunk.bits[7] = chunk.bits[7].replace_where(replace, u64x8::NO_BITS);
+            chunk.bits.replace_where(replace, [
+                NO_BITS,  NO_BITS, NO_BITS, NO_BITS,
+                ALL_BITS,   f | r,       n,   r | t
+            ]);
 
             // Replace Unicode escapes
             let u     = chunk.bits.where_eq(b'u'); // u 75 01111001
@@ -279,7 +414,7 @@ impl JsonStringEscapeParser {
     }
 
     ///
-    /// Replace Unicode escapes (\uXXXX) where XXXX is hex. Replace with equiv. UTF-8
+    /// Replace Unicode escapes (\uXXXX) with equivalent UTF-8 (where XXXX is hex).
     /// 
     /// This will shove the UTF-8 over to the right of the XXXX, and return a mask saying which
     /// bytes it *didn't* use.
@@ -324,6 +459,7 @@ impl JsonStringEscapeParser {
             let u4 = u4 & is_hex;
 
             // Now figure out which ones are leading, and replace the appropriate bits if so
+            // \u u1 u2 u3 u4
             let u2_lead = prev_hex3 | prev_hex2 | prev_hex1 | prev_hex0 | hex3;
             let u3_cont = u2_lead.prev(&mut self.u3_cont);
             let u3_none = !u3_cont & !(prev_hex2 | prev_hex1 | prev_hex0 | hex3 | hex2);
@@ -352,15 +488,28 @@ impl JsonStringEscapeParser {
 
             do_not_copy |= u1 | (u2 & !u2_lead) | (u3 & u3_none);
 
-            let replace = u2 | u3 | u4 & !do_not_copy;
-            chunk.bits[7] = chunk.bits[7].replace_where(replace,  !u4_lead);
-            chunk.bits[6] = chunk.bits[6].replace_where(replace,  u2              | (u3 & !u3_cont)             | (u4 & prev_hex2));
-            chunk.bits[5] = chunk.bits[5].replace_where(replace,  u2              | (u3 & !u3_cont & prev_hex3) | (u4 & prev_hex1));
-            chunk.bits[4] = chunk.bits[4].replace_where(replace,                    (u3 & prev_hex2)            | (u4 & prev_hex0));
-            chunk.bits[3] = chunk.bits[3].replace_where(replace, (u2 & prev_hex3) | (u3 & prev_hex1) | (u4 &      hex3));
-            chunk.bits[2] = chunk.bits[2].replace_where(replace, (u2 & prev_hex2) | (u3 & prev_hex0) | (u4 &      hex2));
-            chunk.bits[1] = chunk.bits[1].replace_where(replace, (u2 & prev_hex1) | (u3 &      hex3) | (u4 &      hex1));
-            chunk.bits[0] = chunk.bits[0].replace_where(replace, (u2 & prev_hex0) | (u4 &      hex2) | (u4 &      hex0));
+            const ALL_BITS: u64x8 = u64x8::ALL_BITS;
+            const NO_BITS: u64x8 = u64x8::NO_BITS;
+
+            // Replace u2 (leading 3 byte)
+            let replace_u2 = u2 & u2_lead;
+            chunk.bits.replace_where(replace_u2, [
+                ALL_BITS,  ALL_BITS,  ALL_BITS,  NO_BITS,
+                prev_hex3, prev_hex2, prev_hex1, prev_hex0
+            ]);
+
+            // Replace u3 (leading 2 byte or 3 byte cont)
+            let replace_u3 = u3 & !u3_none;
+            chunk.bits.replace_where(replace_u3, [
+                ALL_BITS,   !u3_cont,   prev_hex3, prev_hex2,
+                prev_hex1, prev_hex0,        hex3,      hex2
+            ]);
+
+            // Replace u4 (ASCII byte, or 2/3 byte cont)
+            chunk.bits.replace_where(u4, [
+                !u4_lead, prev_hex2, prev_hex1, prev_hex0,
+                    hex3,      hex2,      hex1,      hex0
+            ]);
 
             do_not_copy
         }
@@ -510,8 +659,8 @@ impl JsonLiteralNamesParser {
 
         // Literal characters are all the above characters.
         let literal_name = t | r | u | e |
-                        f | a | l | s |
-                        n;
+                           f | a | l | s |
+                           n;
 
         // Mask out places where previous literal characters *aren't* followed by the correct next character.
         // This is how we weed out partial and otherwise jumbled literals like nul, ull and ulnl
