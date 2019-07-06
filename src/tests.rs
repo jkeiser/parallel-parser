@@ -266,6 +266,20 @@ mod find_strings {
         }.test()
     }
     #[test]
+    fn escaped_backslash() {
+        TestJsonStrings {
+            input:   vec![ head(br#""\\""#) ],
+            strings: vec![ r#"\"# ]
+        }.test()
+    }
+    #[test]
+    fn escaped_slash() {
+        TestJsonStrings {
+            input:   vec![ head(br#""\/""#) ],
+            strings: vec![ r#"/"# ]
+        }.test()
+    }
+    #[test]
     fn valid_string_bytes_ascii() {
         // 20-7F (escape codes below 20 not valid)
         TestJsonStrings {
